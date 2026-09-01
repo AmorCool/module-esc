@@ -17,30 +17,15 @@ jobs:
 
       - name: Validate module manifests
         run: |
-          set -e
           fail=0
           for dir in modules/*/; do
             id=$(basename "$dir")
-            f="$dir/module.json"
-            if [ ! -f "$f" ]; then
-              echo "❌ $id 缺少 module.json"
+            if python3 validate.py "$dir/module.json"; then
+              echo "OK $id"
+            else
+              echo "FAIL $id"
               fail=1
-              continue
             fi
-            python3 - "$f" <<'PY'
-import json, sys
-m = json.load(open(sys.argv[1], encoding='utf-8'))
-required = ['spec', 'id', 'name', 'version', 'description', 'actions']
-missing = [k for k in required if k not in m]
-assert m.get('spec') == 'escape.module.v1', 'spec 必须为 escape.module.v1'
-if missing:
-    print('❌ 缺少字段:', missing); sys.exit(1)
-for a in m['actions']:
-    if a.get('type') != 'signal':
-        print('❌ 不支持的 action type:', a.get('type')); sys.exit(1)
-print('✅', m['id'])
-PY
-            [ $? -ne 0 ] && fail=1 || echo "✔ $id 校验通过"
           done
           exit $fail
 
