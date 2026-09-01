@@ -23,8 +23,12 @@ def main() -> int:
     if m["spec"] != "escape.module.v1":
         print(f"spec 不支持: {m['spec']}")
         return 1
-    if not isinstance(m["actions"], list) or not m["actions"]:
-        print("actions 必须为非空数组")
+    if not isinstance(m["actions"], list):
+        print("actions 必须为数组")
+        return 1
+    # binary 模块（自启动服务）合法地没有 signal actions
+    if not m["actions"] and "binary" not in m:
+        print("普通模块 actions 不能为空（binary 模块除外）")
         return 1
     for a in m["actions"]:
         if a.get("type") != "signal":
