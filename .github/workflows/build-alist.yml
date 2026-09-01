@@ -42,6 +42,19 @@ jobs:
       - name: Fake-sign (ldid)
         run: ldid -S modules/com.escapeos.alist/bin/alist
 
+      - name: Sign module manifest (official ed25519)
+        env:
+          HOTFIX_PRIVATE_KEY: ${{ secrets.HOTFIX_PRIVATE_KEY }}
+        run: |
+          set -e
+          echo "$HOTFIX_PRIVATE_KEY" > /tmp/hotfix_key.pem
+          chmod 600 /tmp/hotfix_key.pem
+          openssl pkeyutl -sign -inkey /tmp/hotfix_key.pem -rawin \
+            -in modules/com.escapeos.alist/module.json -out sig.bin
+          base64 -w0 sig.bin > modules/com.escapeos.alist/signature.sig
+          rm -f sig.bin
+          echo "✍ manifest 已签名"
+
       - name: Package module zip
         run: |
           mkdir -p dist

@@ -15,6 +15,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Sign hotfix/binary modules (official ed25519)
+        env:
+          HOTFIX_PRIVATE_KEY: ${{ secrets.HOTFIX_PRIVATE_KEY }}
+        run: |
+          set -e
+          if [ -z "$HOTFIX_PRIVATE_KEY" ]; then
+            echo "⚠️ 未配置 HOTFIX_PRIVATE_KEY secret——热补丁/二进制模块将无签名（app 会拒绝导入）"
+          else
+            echo "$HOTFIX_PRIVATE_KEY" > /tmp/hotfix_key.pem
+            chmod 600 /tmp/hotfix_key.pem
+            openssl pkey -in /tmp/hotfix_key.pem -noout && echo "私钥加载 OK"
+          fi
+          for dir in modules/*/; do
+            id=$(basename "$dir")
+            # 含 hotfix 或 binary 配置的模块需要签名
+            if grep -q '"hotfix"\|"binary"' "$dir/module.json" 2>/dev/null; then
+              if [ -n "$HOTFIX_PRIVATE_KEY" ]; then
+                openssl pkeyutl -sign -inkey /tmp/hotfix_key.pem -rawin \
+                  -in "$dir/module.json" -out "$dir/signature.sig.bin"
+                base64 -w0 "$dir/signature.sig.bin" > "$dir/signature.sig"
+                rm -f "$dir/signature.sig.bin"
+                echo "✍ $id 已签名"
+              else
+                echo "⚠ $id 需要签名但无私钥——跳过（app 将拒绝导入）"
+              fi
+            fi
+          done
+
       - name: Validate module manifests
         run: |
           fail=0
@@ -35,7 +63,7 @@ jobs:
           for dir in modules/*/; do
             id=$(basename "$dir")
             ver=$(python3 -c "import json;print(json.load(open('$dir/module.json',encoding='utf-8'))['version'])")
-            zip -r "dist/${id}-v${ver}.zip" "$dir" -x '*/.*'
+            zip -r "dist/${id}-v${ver}.zip" "$dir" -x '*/.*' '*/data/*' '*/run.log'
             echo "打包: ${id}-v${ver}.zip"
           done
           ls -la dist/
