@@ -1,0 +1,22 @@
+{
+  "spec": "escape.module.v1",
+  "id": "com.escapeos.alist",
+  "name": "Alist 本地网盘",
+  "icon": "externaldrive.connected.to.line.below",
+  "accent": "green",
+  "version": "3.41.0",
+  "versionCode": 1,
+  "author": "EscapeOS Official",
+  "description": "本地运行 Alist 文件列表服务（Go 语言，随宿主自启动）。启动后浏览器访问 http://127.0.0.1:5244 即可管理手机文件，支持 WebDAV 挂载到电脑。",
+  "notes": "需要 iOS arm64 版二进制（ldid 伪签名后可用）。默认账号 admin，密码见启动日志 run.log。",
+  "category": "本地服务",
+  "minHostVersion": "0.3.66",
+  "binary": {
+    "executable": "bin/alist",
+    "args": ["server", "--data", "data"],
+    "port": 5244,
+    "webPath": "/",
+    "autoStart": true
+  },
+  "actions": []
+}
