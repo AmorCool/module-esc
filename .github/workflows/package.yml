@@ -1,0 +1,71 @@
+name: Package Modules
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate module manifests
+        run: |
+          set -e
+          fail=0
+          for dir in modules/*/; do
+            id=$(basename "$dir")
+            f="$dir/module.json"
+            if [ ! -f "$f" ]; then
+              echo "❌ $id 缺少 module.json"
+              fail=1
+              continue
+            fi
+            python3 - "$f" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1], encoding='utf-8'))
+required = ['spec', 'id', 'name', 'version', 'description', 'actions']
+missing = [k for k in required if k not in m]
+assert m.get('spec') == 'escape.module.v1', 'spec 必须为 escape.module.v1'
+if missing:
+    print('❌ 缺少字段:', missing); sys.exit(1)
+for a in m['actions']:
+    if a.get('type') != 'signal':
+        print('❌ 不支持的 action type:', a.get('type')); sys.exit(1)
+print('✅', m['id'])
+PY
+            [ $? -ne 0 ] && fail=1 || echo "✔ $id 校验通过"
+          done
+          exit $fail
+
+      - name: Package each module into .zip
+        run: |
+          mkdir -p dist
+          for dir in modules/*/; do
+            id=$(basename "$dir")
+            ver=$(python3 -c "import json;print(json.load(open('$dir/module.json',encoding='utf-8'))['version'])")
+            zip -r "dist/${id}-v${ver}.zip" "$dir" -x '*/.*'
+            echo "打包: ${id}-v${ver}.zip"
+          done
+          ls -la dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: modules
+          path: dist/*.zip
+
+      - name: Release (edge)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: edge
+          name: "模块构建 (edge)"
+          files: dist/*.zip
+          allowUpdates: true
+          prerelease: true
