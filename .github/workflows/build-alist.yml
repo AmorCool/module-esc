@@ -3,6 +3,8 @@ name: Build alist for iOS
 # alist 官方 Release 没有 iOS 构建——用 Go 交叉编译 GOOS=ios GOARCH=arm64
 # （CGO_ENABLED=0 纯静态），产物为 Mach-O；真机运行需 ldid 伪签名
 # （LC 环境可直接跑，原生机型需自签/签名工具处理）。
+# 前端照抄官方 FetchWebRelease：dist.tar.gz 解压顶层 dist/ → public/dist
+# （public.go 里 //go:embed all:dist；go.mod 要求 go >= 1.25）。
 
 on:
   workflow_dispatch:
@@ -20,7 +22,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.25"
 
       - name: Install ldid
         run: |
@@ -34,10 +36,22 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/AlistGo/alist.git _alist
           cd _alist
-          # 前端 dist（alist 构建需要 web 资源内嵌）
-          curl -sL https://github.com/AlistGo/alist-web/releases/latest/download/dist.tar.gz | tar xz -C public/sw
-          CGO_ENABLED=0 GOOS=ios GOARCH=arm64 go build -o ../modules/com.escapeos.alist/bin/alist -ldflags="-s -w" .
+          # 前端资源：照抄官方 FetchWebRelease——顶层 dist/ 移到 public/dist（//go:embed all:dist）
+          curl -sL https://github.com/alist-org/alist-web/releases/latest/download/dist.tar.gz -o dist.tar.gz
+          tar -zxf dist.tar.gz
+          rm -rf public/dist
+          mv -f dist public
+          rm -f dist.tar.gz
+          webVersion=$(curl -sL -t1 -T2 "https://api.github.com/repos/alist-org/alist-web/releases/latest" | grep '"tag_name"' | head -n 1 | awk -F ':' '{print $2}' | sed 's/"//g;s/,//g;s/ //g')
+          ver=$(python3 -c "import json;print(json.load(open('../modules/com.escapeos.alist/module.json',encoding='utf-8'))['version'])")
+          echo "alist backend: $ver, frontend: $webVersion"
+          CGO_ENABLED=0 GOOS=ios GOARCH=arm64 go build \
+            -o ../modules/com.escapeos.alist/bin/alist \
+            -ldflags="-s -w -X 'github.com/alist-org/alist/v3/internal/conf.Version=$ver' -X 'github.com/alist-org/alist/v3/internal/conf.WebVersion=$webVersion'" \
+            -tags=jsoniter .
           cd ..
+          file modules/com.escapeos.alist/bin/alist
+          ls -la modules/com.escapeos.alist/bin/
 
       - name: Fake-sign (ldid)
         run: ldid -S modules/com.escapeos.alist/bin/alist
@@ -67,3 +81,8 @@ jobs:
         with:
           name: alist-ios
           path: dist/*.zip
+
+      - name: Publish to edge release (clobber)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload edge dist/*.zip --clobber -R "$GITHUB_REPOSITORY"
