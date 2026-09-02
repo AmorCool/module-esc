@@ -106,8 +106,13 @@ jobs:
             -Wl,-install_name,"@rpath/openlist.dylib" \
             -o ../modules/com.escapeos.alist/bin/openlist.dylib libopenlist.a
           xcrun -sdk iphoneos strip -x ../modules/com.escapeos.alist/bin/openlist.dylib || true
+          # dylib 用 Apple 官方 codesign 伪签名（ldid 对 138MB Go 特殊 dylib 签名曾被设备判 invalid）
+          codesign --force --sign - ../modules/com.escapeos.alist/bin/openlist.dylib
+          codesign --verify --strict ../modules/com.escapeos.alist/bin/openlist.dylib && echo "✅ dylib 签名自检通过"
           cd ..
-          ldid -S modules/com.escapeos.alist/bin/openlist.dylib
+          # exe 用 ldid；dylib 已在上面用 Apple codesign 签好（勿再 ldid 覆盖）
+          ldid -S modules/com.escapeos.alist/bin/alist
+          codesign -v --strict modules/com.escapeos.alist/bin/openlist.dylib && echo "✅ dylib 签名终检通过"
           file modules/com.escapeos.alist/bin/alist
           file modules/com.escapeos.alist/bin/openlist.dylib
           ls -la modules/com.escapeos.alist/bin/
