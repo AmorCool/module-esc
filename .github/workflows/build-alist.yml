@@ -1,10 +1,12 @@
-name: Build alist for iOS
+name: Build alist module for iOS (OpenList backend)
 
-# alist 官方 Release 没有 iOS 构建——用 Go 交叉编译 GOOS=ios GOARCH=arm64
+# AList 已闭源（2025 收购争议），模块后端改用社区开源分支 OpenList（OpenListTeam/OpenList）。
+# OpenList 官方 Release 没有 iOS 构建——用 Go 交叉编译 GOOS=ios GOARCH=arm64
 # （CGO_ENABLED=0 纯静态），产物为 Mach-O；真机运行需 ldid 伪签名
 # （LC 环境可直接跑，原生机型需自签/签名工具处理）。
-# 前端照抄官方 FetchWebRelease：dist.tar.gz 解压顶层 dist/ → public/dist
-# （public.go 里 //go:embed all:dist；go.mod 要求 go >= 1.25）。
+# 前端照抄官方 FetchWebRelease：OpenList-Frontend latest 的
+# openlist-frontend-dist-*.tar.gz 平铺解压进 public/dist（public.go //go:embed all:dist）；
+# go.mod 要求 go 1.25+（官方 release.yml 用 1.27.0）。
 
 on:
   workflow_dispatch:
@@ -22,7 +24,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.27.0"
 
       - name: Install ldid
         run: |
@@ -32,22 +34,26 @@ jobs:
             chmod +x /usr/local/bin/ldid
           }
 
-      - name: Build alist (iOS arm64)
+      - name: Build OpenList (iOS arm64)
         run: |
-          git clone --depth 1 https://github.com/AlistGo/alist.git _alist
-          cd _alist
-          # 前端资源：照抄官方 FetchWebRelease——顶层 dist/ 移到 public/dist（//go:embed all:dist）
-          curl -sL https://github.com/alist-org/alist-web/releases/latest/download/dist.tar.gz -o dist.tar.gz
-          tar -zxf dist.tar.gz
-          rm -rf public/dist
-          mv -f dist public
+          git clone --depth 1 https://github.com/OpenListTeam/OpenList.git _openlist
+          cd _openlist
+          # 前端资源：照抄官方 FetchWebRelease——openlist-frontend-dist-*.tar.gz 平铺解压进 public/dist
+          frontendTar=$(curl -sL --max-time 10 -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/OpenListTeam/OpenList-Frontend/releases/latest" \
+            | jq -r '.assets[].browser_download_url' \
+            | grep "openlist-frontend-dist" | grep -v "lite" | grep "\.tar\.gz$")
+          echo "frontend: $frontendTar"
+          curl -fsSL "$frontendTar" -o dist.tar.gz
+          rm -rf public/dist && mkdir -p public/dist
+          tar -zxf dist.tar.gz -C public/dist
           rm -f dist.tar.gz
-          webVersion=$(curl -sL -t1 -T2 "https://api.github.com/repos/alist-org/alist-web/releases/latest" | grep '"tag_name"' | head -n 1 | awk -F ':' '{print $2}' | sed 's/"//g;s/,//g;s/ //g')
+          webVersion=$(basename "$frontendTar" | sed 's/openlist-frontend-dist-//;s/\.tar\.gz$//')
           ver=$(python3 -c "import json;print(json.load(open('../modules/com.escapeos.alist/module.json',encoding='utf-8'))['version'])")
-          echo "alist backend: $ver, frontend: $webVersion"
+          echo "openlist module version: $ver, frontend: $webVersion"
           CGO_ENABLED=0 GOOS=ios GOARCH=arm64 go build \
             -o ../modules/com.escapeos.alist/bin/alist \
-            -ldflags="-s -w -X 'github.com/alist-org/alist/v3/internal/conf.Version=$ver' -X 'github.com/alist-org/alist/v3/internal/conf.WebVersion=$webVersion'" \
+            -ldflags="-s -w -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.Version=$ver' -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$webVersion'" \
             -tags=jsoniter .
           cd ..
           file modules/com.escapeos.alist/bin/alist
