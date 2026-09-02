@@ -62,6 +62,12 @@ jobs:
           mkdir -p dist
           for dir in modules/*/; do
             id=$(basename "$dir")
+            # 二进制模块由专属构建工作流产出真实二进制（如 build-alist.yml 产出 alist），
+            # 此处跳过——否则 bin/ 空壳 zip 会覆盖 edge release 上的完整包
+            if [ "$id" = "com.escapeos.alist" ]; then
+              echo "跳过 $id（由 build-alist.yml 构建发布）"
+              continue
+            fi
             ver=$(python3 -c "import json;print(json.load(open('$dir/module.json',encoding='utf-8'))['version'])")
             zip -r "dist/${id}-v${ver}.zip" "$dir" -x '*/.*' '*/data/*' '*/run.log'
             echo "打包: ${id}-v${ver}.zip"

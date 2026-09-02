@@ -96,8 +96,12 @@ jobs:
               -tags=jsoniter .
           SDK=$(xcrun -sdk iphoneos -show-sdk-path)
           # -force_load 必须：否则链接器不抽取任何归档成员（无未定义符号引用），dylib 为空壳
+          # 框架/lresolv 清单 = gomobile ios 同款（Security: Sec*；lresolv: res_9_*）
           xcrun -sdk iphoneos clang -dynamiclib -isysroot "$SDK" \
             -framework Foundation -framework CoreFoundation \
+            -framework Security -framework CFNetwork -framework SystemConfiguration \
+            -framework UIKit -framework MobileCoreServices \
+            -lresolv \
             -Wl,-force_load,"$PWD/libopenlist.a" \
             -Wl,-install_name,"@rpath/openlist.dylib" \
             -o ../modules/com.escapeos.alist/bin/openlist.dylib libopenlist.a
