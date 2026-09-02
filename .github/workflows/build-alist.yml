@@ -4,11 +4,19 @@ name: Build alist module for iOS (OpenList backend)
 # OpenList 官方 Release 没有 iOS 构建。GOOS=ios 硬性要求 cgo 外链
 # （"ios/arm64 requires external (cgo) linking"），CGO_ENABLED=0 走不通——
 # 所以 runner 用 macos-15（自带 Xcode/iPhoneOS SDK），CC 走
-# xcrun -sdk iphoneos clang 交叉编译，产出 iOS 平台 Mach-O 后 ldid 伪签名
-# （LC 环境可直接跑，原生机型需自签/签名工具处理）。
+# xcrun -sdk iphoneos clang 交叉编译，产出 iOS 平台 Mach-O 后 codesign 伪签名。
 # 前端照抄官方 FetchWebRelease：OpenList-Frontend latest 的
-# openlist-frontend-dist-*.tar.gz 平铺解压进 public/dist（public.go //go:embed all:dist）；
-# go.mod 要求 go 1.25+（官方 release.yml 用 1.27.0）。
+# openlist-frontend-dist-*.tar.gz 平铺解压进 public/dist（public.go //go:embed all:dist）。
+#
+# v0.3.90 修复同步（来源：EscapeOS 仓库 sapbridge/，2026-09-02 排查定论）：
+# 1. bridge 用 EscapeOS 的 openlist.go（数据目录参数传入 + 服务逻辑跑真 goroutine
+#    防爆栈 + --debug --log-std + 绝不 os.Exit + admin/memtest/probe 等诊断导出），
+#    替代旧的内联 echo 版本（env 传数据目录不可见 + 深调用爆栈两大根因已修）
+# 2. -tags "sqlite_cgo_compat"：sqlite 驱动从 glebarez（modernc 纯 Go 转译，iOS/LC
+#    沙箱 InitDB 原生崩溃）切换为 gorm.io/driver/sqlite（mattn cgo 真 C sqlite3）
+# 3. patch_stages.py：bootstrap/db 各函数注入 begin/done 阶段标记（写入模块数据目录
+#    temp/，宿主 SSH mlog 可读），崩溃可函数级定位
+# 4. go get gorm.io/driver/sqlite：cgo 驱动依赖（mattn/go-sqlite3 随之引入）
 
 on:
   workflow_dispatch:
@@ -54,59 +62,31 @@ jobs:
           webVersion=$(basename "$frontendTar" | sed 's/openlist-frontend-dist-//;s/\.tar\.gz$//')
           ver=$(python3 -c "import json;print(json.load(open('../modules/com.escapeos.alist/module.json',encoding='utf-8'))['version'])")
           echo "openlist module version: $ver, frontend: $webVersion"
-          # dylib（进程内加载）：LC 侧载环境 posix_spawn 必被 AMFI 拒（EPERM），
-          # 宿主 dlopen bin/openlist.dylib 进程内启动（机制同 LC 注入 tweak）
-          # bridge 铁律：绝不 os.Exit（进程内退出=杀宿主）——不调 cmd.Execute()（内部 os.Exit），
-          # 直接走 RootCmd；错误写 stderr.log 后永久阻塞（time.Sleep 不触发死锁检测）
-          {
-            echo 'package main'
-            echo ''
-            echo 'import "C"'
-            echo ''
-            echo 'import ('
-            echo '	"fmt"'
-            echo '	"log"'
-            echo '	"os"'
-            echo '	"path/filepath"'
-            echo '	"time"'
-            echo ''
-            echo '	"github.com/OpenListTeam/OpenList/v4/cmd"'
-            echo ')'
-            echo ''
-            echo '// OpenListMain 供宿主 dlopen 后调用（进程内启动，随宿主退出）。'
-            echo '// 数据目录从环境变量 OPENLIST_DATA 读取；Go stderr/log 重定向到 data/stderr.log。'
-            echo '//'
-            echo '//export OpenListMain'
-            echo 'func OpenListMain() C.int {'
-            echo '	dataDir := os.Getenv("OPENLIST_DATA")'
-            echo '	if dataDir == "" {'
-            echo '		dataDir = "./data"'
-            echo '	}'
-            echo '	_ = os.MkdirAll(dataDir, 0755)'
-            echo '	if f, err := os.OpenFile(filepath.Join(dataDir, "stderr.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {'
-            echo '		os.Stderr = f'
-            echo '		log.SetOutput(f)'
-            echo '		log.SetFlags(log.LstdFlags)'
-            echo '	}'
-            echo '	fmt.Fprintln(os.Stderr, "[openlist-dylib] server starting (in-process)")'
-            echo '	os.Args = []string{"openlist", "server", "--data", dataDir}'
-            echo '	// 成功 = 阻塞服务中；失败 = 记录到 stderr.log 后永久阻塞（宿主存活）'
-            echo '	if err := cmd.RootCmd.Execute(); err != nil {'
-            echo '		fmt.Fprintf(os.Stderr, "[openlist-dylib] server exited with error: %v\n", err)'
-            echo '		fmt.Fprintln(os.Stderr, "[openlist-dylib] host kept alive (never os.Exit)")'
-            echo '	}'
-            echo '	for {'
-            echo '		time.Sleep(time.Hour)'
-            echo '	}'
-            echo '	return 0'
-            echo '}'
-          } > bridge_ios.go
+
+          # v0.3.90：bridge 改用 EscapeOS 仓库的最新实现（数据目录参数传入 + goroutine
+          # 防爆栈 + --debug --log-std + 绝不 os.Exit + 诊断导出），替代旧内联 echo 版本
+          curl -fsSL "https://raw.githubusercontent.com/AmorCool/EscapeOS/migrate-xcode/sapbridge/openlist.go" \
+            -o bridge_ios.go
+          [ -s bridge_ios.go ] || { echo "❌ bridge_ios.go 拉取失败"; exit 1; }
+          grep -q "openlist_embed" bridge_ios.go || { echo "❌ bridge_ios.go 内容异常"; exit 1; }
+
+          # 崩溃定位标记：bootstrap/db 各函数注入 begin/done（写入模块数据目录 temp/）
+          curl -fsSL "https://raw.githubusercontent.com/AmorCool/EscapeOS/migrate-xcode/sapbridge/patch_stages.py" \
+            -o patch_stages.py
+          [ -s patch_stages.py ] && python3 patch_stages.py . || echo "?? 标记注入失败（继续未打标记构建）"
+          "$(command -v gofmt || echo gofmt)" -w internal/bootstrap internal/db 2>/dev/null || true
+
+          # cgo sqlite 驱动依赖（-tags sqlite_cgo_compat 引用 gorm.io/driver/sqlite → mattn）
+          go get gorm.io/driver/sqlite 2>&1 | tail -1 || true
+          go mod tidy 2>&1 | tail -1 || true
+
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
             CC="xcrun -sdk iphoneos clang" \
             go build -buildmode=c-archive \
+              -tags "openlist_embed sqlite_cgo_compat,jsoniter" \
               -o libopenlist.a \
               -ldflags="-s -w -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.Version=$ver' -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$webVersion'" \
-              -tags=jsoniter .
+              .
           SDK=$(xcrun -sdk iphoneos -show-sdk-path)
           # -force_load 必须：否则链接器不抽取任何归档成员（无未定义符号引用），dylib 为空壳
           # 框架/lresolv 清单 = gomobile ios 同款（Security: Sec*；lresolv: res_9_*）
