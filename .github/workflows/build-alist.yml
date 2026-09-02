@@ -73,13 +73,21 @@ jobs:
           HOTFIX_PRIVATE_KEY: ${{ secrets.HOTFIX_PRIVATE_KEY }}
         run: |
           set -e
-          # macOS 自带 LibreSSL 不支持 -rawin（ed25519 必需）：切 brew openssl@3
-          OPENSSL=openssl
-          if openssl version | grep -qi LibreSSL; then
-            OPENSSL=/opt/homebrew/opt/openssl@3/bin/openssl
-            [ -x "$OPENSSL" ] || brew install openssl@3
+          # -rawin（ed25519 必需）是 OpenSSL 3.0+ 选项；macos runner PATH 里是 1.1.1w，
+          # 也不支持。所以：系统是 3.x 就用系统的，否则找 brew openssl@3，没有就装。
+          OPENSSL=""
+          if openssl version 2>/dev/null | grep -q "^OpenSSL 3"; then
+            OPENSSL=openssl
+          else
+            for p in /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+              [ -x "$p" ] && OPENSSL="$p" && break
+            done
+            if [ -z "$OPENSSL" ]; then
+              brew install openssl@3
+              OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
+            fi
           fi
-          $OPENSSL version
+          echo "using: $OPENSSL"; $OPENSSL version
           echo "$HOTFIX_PRIVATE_KEY" > /tmp/hotfix_key.pem
           chmod 600 /tmp/hotfix_key.pem
           $OPENSSL pkeyutl -sign -inkey /tmp/hotfix_key.pem -rawin \
