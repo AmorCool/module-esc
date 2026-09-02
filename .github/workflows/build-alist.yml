@@ -35,14 +35,17 @@ jobs:
           ldid -V || true
 
       - name: Build OpenList (iOS arm64)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git clone --depth 1 https://github.com/OpenListTeam/OpenList.git _openlist
           cd _openlist
           # 前端资源：照抄官方 FetchWebRelease——openlist-frontend-dist-*.tar.gz 平铺解压进 public/dist
-          frontendTar=$(curl -sL --max-time 10 -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/OpenListTeam/OpenList-Frontend/releases/latest" \
-            | jq -r '.assets[].browser_download_url' \
-            | grep "openlist-frontend-dist" | grep -v "lite" | grep "\.tar\.gz$")
+          # 用 gh api（带 GITHUB_TOKEN 认证）——macos runner 未认证 IP 常被限流，jq 会拿到 null
+          frontendTar=$(gh api repos/OpenListTeam/OpenList-Frontend/releases/latest \
+            -q '.assets[].browser_download_url' \
+            | grep "openlist-frontend-dist" | grep -v "lite" | grep "\.tar\.gz$" | head -1)
+          [ -n "$frontendTar" ] || { echo "❌ 未找到 openlist-frontend-dist 资产"; exit 1; }
           echo "frontend: $frontendTar"
           curl -fsSL "$frontendTar" -o dist.tar.gz
           rm -rf public/dist && mkdir -p public/dist
