@@ -95,8 +95,10 @@ jobs:
               -ldflags="-s -w -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.Version=$ver' -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$webVersion'" \
               -tags=jsoniter .
           SDK=$(xcrun -sdk iphoneos -show-sdk-path)
+          # -force_load 必须：否则链接器不抽取任何归档成员（无未定义符号引用），dylib 为空壳
           xcrun -sdk iphoneos clang -dynamiclib -isysroot "$SDK" \
             -framework Foundation -framework CoreFoundation \
+            -Wl,-force_load,"$PWD/libopenlist.a" \
             -Wl,-install_name,"@rpath/openlist.dylib" \
             -o ../modules/com.escapeos.alist/bin/openlist.dylib libopenlist.a
           xcrun -sdk iphoneos strip -x ../modules/com.escapeos.alist/bin/openlist.dylib || true
