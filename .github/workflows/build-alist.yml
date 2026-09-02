@@ -54,8 +54,10 @@ jobs:
           webVersion=$(basename "$frontendTar" | sed 's/openlist-frontend-dist-//;s/\.tar\.gz$//')
           ver=$(python3 -c "import json;print(json.load(open('../modules/com.escapeos.alist/module.json',encoding='utf-8'))['version'])")
           echo "openlist module version: $ver, frontend: $webVersion"
-          # 只产 dylib：独立进程 exe 在侧载 LC 环境必被 AMFI 拒（EPERM，平台级限制），宿主走进程内 dlopen。
-          # 体积参照：官方 darwin-arm64 完整版同为 137.6MB，-s -w 已生效（__LINKEDIT 仅 1.8MB），无冗余可剥
+          # dylib（进程内加载）：LC 侧载环境 posix_spawn 必被 AMFI 拒（EPERM），
+          # 宿主 dlopen bin/openlist.dylib 进程内启动（机制同 LC 注入 tweak）
+          # bridge 铁律：绝不 os.Exit（进程内退出=杀宿主）——不调 cmd.Execute()（内部 os.Exit），
+          # 直接走 RootCmd；错误写 stderr.log 后永久阻塞（time.Sleep 不触发死锁检测）
           {
             echo 'package main'
             echo ''
@@ -63,11 +65,16 @@ jobs:
             echo ''
             echo 'import ('
             echo '	"fmt"'
+            echo '	"log"'
             echo '	"os"'
+            echo '	"path/filepath"'
+            echo '	"time"'
+            echo ''
+            echo '	"github.com/OpenListTeam/OpenList/v4/cmd"'
             echo ')'
             echo ''
             echo '// OpenListMain 供宿主 dlopen 后调用（进程内启动，随宿主退出）。'
-            echo '// 数据目录从环境变量 OPENLIST_DATA 读取。'
+            echo '// 数据目录从环境变量 OPENLIST_DATA 读取；Go stderr/log 重定向到 data/stderr.log。'
             echo '//'
             echo '//export OpenListMain'
             echo 'func OpenListMain() C.int {'
@@ -75,9 +82,22 @@ jobs:
             echo '	if dataDir == "" {'
             echo '		dataDir = "./data"'
             echo '	}'
-            echo '	fmt.Fprintf(os.Stderr, "[openlist-dylib] starting server, data=%s\n", dataDir)'
+            echo '	_ = os.MkdirAll(dataDir, 0755)'
+            echo '	if f, err := os.OpenFile(filepath.Join(dataDir, "stderr.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err == nil {'
+            echo '		os.Stderr = f'
+            echo '		log.SetOutput(f)'
+            echo '		log.SetFlags(log.LstdFlags)'
+            echo '	}'
+            echo '	fmt.Fprintln(os.Stderr, "[openlist-dylib] server starting (in-process)")'
             echo '	os.Args = []string{"openlist", "server", "--data", dataDir}'
-            echo '	main()'
+            echo '	// 成功 = 阻塞服务中；失败 = 记录到 stderr.log 后永久阻塞（宿主存活）'
+            echo '	if err := cmd.RootCmd.Execute(); err != nil {'
+            echo '		fmt.Fprintf(os.Stderr, "[openlist-dylib] server exited with error: %v\n", err)'
+            echo '		fmt.Fprintln(os.Stderr, "[openlist-dylib] host kept alive (never os.Exit)")'
+            echo '	}'
+            echo '	for {'
+            echo '		time.Sleep(time.Hour)'
+            echo '	}'
             echo '	return 0'
             echo '}'
           } > bridge_ios.go
