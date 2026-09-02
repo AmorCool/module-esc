@@ -83,7 +83,7 @@ jobs:
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
             CC="xcrun -sdk iphoneos clang" \
             go build -buildmode=c-archive \
-              -tags "openlist_embed sqlite_cgo_compat,jsoniter" \
+              -tags "openlist_embed,sqlite_cgo_compat,jsoniter" \
               -o libopenlist.a \
               -ldflags="-s -w -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.Version=$ver' -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$webVersion'" \
               .
