@@ -107,9 +107,6 @@ jobs:
           file modules/com.escapeos.alist/bin/openlist.dylib
           ls -la modules/com.escapeos.alist/bin/
 
-      - name: Fake-sign (ldid)
-        run: ldid -S modules/com.escapeos.alist/bin/alist
-
       - name: Sign module manifest (official ed25519)
         env:
           HOTFIX_PRIVATE_KEY: ${{ secrets.HOTFIX_PRIVATE_KEY }}
