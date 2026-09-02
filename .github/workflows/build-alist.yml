@@ -61,8 +61,49 @@ jobs:
               -o ../modules/com.escapeos.alist/bin/alist \
               -ldflags="-s -w -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.Version=$ver' -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$webVersion'" \
               -tags=jsoniter .
+          # dylib（进程内回退）：LC 侧载环境 posix_spawn 必被 AMFI 拒（EPERM），
+          # 宿主会 dlopen bin/openlist.dylib 进程内启动（机制同 LC 注入 tweak）
+          {
+            echo 'package main'
+            echo ''
+            echo 'import "C"'
+            echo ''
+            echo 'import ('
+            echo '	"fmt"'
+            echo '	"os"'
+            echo ')'
+            echo ''
+            echo '// OpenListMain 供宿主 dlopen 后调用（进程内启动，随宿主退出）。'
+            echo '// 数据目录从环境变量 OPENLIST_DATA 读取。'
+            echo '//'
+            echo '//export OpenListMain'
+            echo 'func OpenListMain() C.int {'
+            echo '	dataDir := os.Getenv("OPENLIST_DATA")'
+            echo '	if dataDir == "" {'
+            echo '		dataDir = "./data"'
+            echo '	}'
+            echo '	fmt.Fprintf(os.Stderr, "[openlist-dylib] starting server, data=%s\n", dataDir)'
+            echo '	os.Args = []string{"openlist", "server", "--data", dataDir}'
+            echo '	main()'
+            echo '	return 0'
+            echo '}'
+          } > bridge_ios.go
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
+            CC="xcrun -sdk iphoneos clang" \
+            go build -buildmode=c-archive \
+              -o libopenlist.a \
+              -ldflags="-s -w -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.Version=$ver' -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$webVersion'" \
+              -tags=jsoniter .
+          SDK=$(xcrun -sdk iphoneos -show-sdk-path)
+          xcrun -sdk iphoneos clang -dynamiclib -isysroot "$SDK" \
+            -framework Foundation -framework CoreFoundation \
+            -Wl,-install_name,"@rpath/openlist.dylib" \
+            -o ../modules/com.escapeos.alist/bin/openlist.dylib libopenlist.a
+          xcrun -sdk iphoneos strip -x ../modules/com.escapeos.alist/bin/openlist.dylib || true
           cd ..
+          ldid -S modules/com.escapeos.alist/bin/openlist.dylib
           file modules/com.escapeos.alist/bin/alist
+          file modules/com.escapeos.alist/bin/openlist.dylib
           ls -la modules/com.escapeos.alist/bin/
 
       - name: Fake-sign (ldid)
