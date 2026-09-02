@@ -1,8 +1,10 @@
 name: Build alist module for iOS (OpenList backend)
 
 # AList 已闭源（2025 收购争议），模块后端改用社区开源分支 OpenList（OpenListTeam/OpenList）。
-# OpenList 官方 Release 没有 iOS 构建——用 Go 交叉编译 GOOS=ios GOARCH=arm64
-# （CGO_ENABLED=0 纯静态），产物为 Mach-O；真机运行需 ldid 伪签名
+# OpenList 官方 Release 没有 iOS 构建。GOOS=ios 硬性要求 cgo 外链
+# （"ios/arm64 requires external (cgo) linking"），CGO_ENABLED=0 走不通——
+# 所以 runner 用 macos-15（自带 Xcode/iPhoneOS SDK），CC 走
+# xcrun -sdk iphoneos clang 交叉编译，产出 iOS 平台 Mach-O 后 ldid 伪签名
 # （LC 环境可直接跑，原生机型需自签/签名工具处理）。
 # 前端照抄官方 FetchWebRelease：OpenList-Frontend latest 的
 # openlist-frontend-dist-*.tar.gz 平铺解压进 public/dist（public.go //go:embed all:dist）；
@@ -16,7 +18,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,14 +27,12 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.27.0"
+          cache: false
 
       - name: Install ldid
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ldid || {
-            curl -sL https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64 -o /usr/local/bin/ldid
-            chmod +x /usr/local/bin/ldid
-          }
+          which ldid || brew install ldid
+          ldid -V || true
 
       - name: Build OpenList (iOS arm64)
         run: |
@@ -51,10 +51,13 @@ jobs:
           webVersion=$(basename "$frontendTar" | sed 's/openlist-frontend-dist-//;s/\.tar\.gz$//')
           ver=$(python3 -c "import json;print(json.load(open('../modules/com.escapeos.alist/module.json',encoding='utf-8'))['version'])")
           echo "openlist module version: $ver, frontend: $webVersion"
-          CGO_ENABLED=0 GOOS=ios GOARCH=arm64 go build \
-            -o ../modules/com.escapeos.alist/bin/alist \
-            -ldflags="-s -w -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.Version=$ver' -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$webVersion'" \
-            -tags=jsoniter .
+          # GOOS=ios 必须 cgo 外链：用 iPhoneOS SDK 的 clang（Go 官方标准做法）
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
+            CC="xcrun -sdk iphoneos clang" \
+            go build \
+              -o ../modules/com.escapeos.alist/bin/alist \
+              -ldflags="-s -w -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.Version=$ver' -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$webVersion'" \
+              -tags=jsoniter .
           cd ..
           file modules/com.escapeos.alist/bin/alist
           ls -la modules/com.escapeos.alist/bin/
@@ -71,7 +74,8 @@ jobs:
           chmod 600 /tmp/hotfix_key.pem
           openssl pkeyutl -sign -inkey /tmp/hotfix_key.pem -rawin \
             -in modules/com.escapeos.alist/module.json -out sig.bin
-          base64 -w0 sig.bin > modules/com.escapeos.alist/signature.sig
+          # macOS BSD base64 无 -w：用 openssl base64 -A 保证单行输出
+          openssl base64 -A -in sig.bin -out modules/com.escapeos.alist/signature.sig
           rm -f sig.bin
           echo "✍ manifest 已签名"
 
