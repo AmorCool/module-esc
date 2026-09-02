@@ -73,12 +73,19 @@ jobs:
           HOTFIX_PRIVATE_KEY: ${{ secrets.HOTFIX_PRIVATE_KEY }}
         run: |
           set -e
+          # macOS 自带 LibreSSL 不支持 -rawin（ed25519 必需）：切 brew openssl@3
+          OPENSSL=openssl
+          if openssl version | grep -qi LibreSSL; then
+            OPENSSL=/opt/homebrew/opt/openssl@3/bin/openssl
+            [ -x "$OPENSSL" ] || brew install openssl@3
+          fi
+          $OPENSSL version
           echo "$HOTFIX_PRIVATE_KEY" > /tmp/hotfix_key.pem
           chmod 600 /tmp/hotfix_key.pem
-          openssl pkeyutl -sign -inkey /tmp/hotfix_key.pem -rawin \
+          $OPENSSL pkeyutl -sign -inkey /tmp/hotfix_key.pem -rawin \
             -in modules/com.escapeos.alist/module.json -out sig.bin
           # macOS BSD base64 无 -w：用 openssl base64 -A 保证单行输出
-          openssl base64 -A -in sig.bin -out modules/com.escapeos.alist/signature.sig
+          $OPENSSL base64 -A -in sig.bin -out modules/com.escapeos.alist/signature.sig
           rm -f sig.bin
           echo "✍ manifest 已签名"
 
