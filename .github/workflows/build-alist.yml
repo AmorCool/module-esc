@@ -34,7 +34,7 @@ jobs:
           which ldid || brew install ldid
           ldid -V || true
 
-      - name: Build OpenList (iOS arm64)
+      - name: Build OpenList dylib (iOS arm64)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -54,15 +54,8 @@ jobs:
           webVersion=$(basename "$frontendTar" | sed 's/openlist-frontend-dist-//;s/\.tar\.gz$//')
           ver=$(python3 -c "import json;print(json.load(open('../modules/com.escapeos.alist/module.json',encoding='utf-8'))['version'])")
           echo "openlist module version: $ver, frontend: $webVersion"
-          # GOOS=ios 必须 cgo 外链：用 iPhoneOS SDK 的 clang（Go 官方标准做法）
-          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
-            CC="xcrun -sdk iphoneos clang" \
-            go build \
-              -o ../modules/com.escapeos.alist/bin/alist \
-              -ldflags="-s -w -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.Version=$ver' -X 'github.com/OpenListTeam/OpenList/v4/internal/conf.WebVersion=$webVersion'" \
-              -tags=jsoniter .
-          # dylib（进程内回退）：LC 侧载环境 posix_spawn 必被 AMFI 拒（EPERM），
-          # 宿主会 dlopen bin/openlist.dylib 进程内启动（机制同 LC 注入 tweak）
+          # 只产 dylib：独立进程 exe 在侧载 LC 环境必被 AMFI 拒（EPERM，平台级限制），宿主走进程内 dlopen。
+          # 体积参照：官方 darwin-arm64 完整版同为 137.6MB，-s -w 已生效（__LINKEDIT 仅 1.8MB），无冗余可剥
           {
             echo 'package main'
             echo ''
@@ -110,10 +103,7 @@ jobs:
           codesign --force --sign - ../modules/com.escapeos.alist/bin/openlist.dylib
           codesign --verify --strict ../modules/com.escapeos.alist/bin/openlist.dylib && echo "✅ dylib 签名自检通过"
           cd ..
-          # exe 用 ldid；dylib 已在上面用 Apple codesign 签好（勿再 ldid 覆盖）
-          ldid -S modules/com.escapeos.alist/bin/alist
           codesign -v --strict modules/com.escapeos.alist/bin/openlist.dylib && echo "✅ dylib 签名终检通过"
-          file modules/com.escapeos.alist/bin/alist
           file modules/com.escapeos.alist/bin/openlist.dylib
           ls -la modules/com.escapeos.alist/bin/
 
