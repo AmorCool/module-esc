@@ -18,5 +18,22 @@
     "webPath": "/",
     "autoStart": true
   },
-  "actions": []
+  "actions": [
+    {
+      "id": "openlist-stop",
+      "label": "停止服务",
+      "icon": "stop.circle",
+      "type": "stop",
+      "symbol": "OpenListStop",
+      "confirm": "停止 OpenList 服务？停止后本进程内不可再启动（重启 EscapeSpace 后恢复）."
+    },
+    {
+      "id": "openlist-resetpwd",
+      "label": "重置管理员密码",
+      "icon": "key.rotation",
+      "type": "setpwd",
+      "symbol": "OpenListAdminSet",
+      "confirm": "重置 OpenList 管理员密码？将生成随机新密码并显示（旧密码失效）."
+    }
+  ]
 }
