@@ -27,6 +27,7 @@
       "symbol": "OpenListStop",
       "args": [],
       "success": "服务已优雅停止. 进程内停止后需重启 EscapeSpace 才能再次启动.",
+      "marksStopped": true,
       "confirm": "停止服务？停止后本进程内不可再启动（重启 EscapeSpace 后恢复）."
     },
     {
