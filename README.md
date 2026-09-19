@@ -22,7 +22,8 @@ modules/com.example.mymodule/
 └── hotfix.js            # 可选：hotfix 模块的 JS 补丁
 ```
 
-清单本身是纯数据；可执行逻辑都在**载荷**里，由宿主按 `binary` / `lua` / `hotfix` / `webroot` 四个可选键决定怎么加载。
+清单本身是纯数据；可执行逻辑都在**载荷**里，由宿主按 `binary` / `lua` / `hotfix` / `webroot` / `ui`
+五个可选键决定怎么加载。
 
 宿主解析清单后，动作（`actions[]`）通过两种通道执行：
 
@@ -30,6 +31,8 @@ modules/com.example.mymodule/
 |---|---|---|
 | `signal` | `ModuleService.runSignal()` | 按进程名模糊匹配 → 查 PID → 下发信号 |
 | `bridge` | `BinaryModuleRunner.bridgeCall()` | `dlsym` 到模块 dylib 的导出符号，直接 C 调用 |
+
+反方向（模块 → 宿主）走 `requires` 声明的**能力接口**（§2.8）。
 
 > `binary` 模块的 dylib 是 **dlopen 进宿主进程**（同一地址空间，不是独立进程），
 > 所以 `bridge` 是一次同步 C 函数调用。
@@ -88,6 +91,8 @@ modules/com.example.mymodule/
 | `binary` | ⬜ | object | 二进制模块（随宿主自启动的后台服务，如 OpenList） |
 | `lua` | ⬜ | object | Lua 脚本模块（`{"entry": "main.lua"}`，纯数据、无签名要求） |
 | `hotfix` | ⬜ | object | 热补丁模块（声明式 patch + 可选 JS 脚本） |
+| `ui` | ⬜ | object | **原生 SwiftUI 二级界面**（见 §2.7） |
+| `requires` | ⬜ | array | **声明需要的宿主能力**（见 §2.8） |
 
 已知 `accent`：`blue` `green` `orange` `red` `purple` `pink` `teal` `indigo` `yellow` `gray` `mint` `cyan` `brown`
 
@@ -206,7 +211,68 @@ modules/com.example.mymodule/
 "webroot": "webroot"
 ```
 
-### 2.7 签名规则（重要）
+### 2.7 `ui` — 原生 SwiftUI 二级界面
+
+`webroot` 是网页（WKWebView），`ui` 是**原生**。用哪个取决于体验要求：
+原生界面进得去、滑得动、和系统控件一致，但**视图实现必须编译进宿主**——
+SwiftUI 视图没法从 zip 里加载。所以 `view` 是一个**注册名**：
+
+```json
+"ui": { "style": "native", "view": "airlift-poc", "title": "Airlift PoC" }
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `style` | ✅ | 目前只有 `native` |
+| `view` | ✅ | 宿主内的视图注册名（小写字母/数字/连字符），如 `airlift-poc` |
+| `title` | ⬜ | 二级界面标题；为空用模块 `name` |
+
+**行为**：模块卡片上出现「打开」按钮 → 进入一个**全屏二级独立界面**——
+底部是**模块自己的**导航栏（不是 App 默认底栏），左上角常驻「返回上一级」与「主页」
+两个按钮（主页一键回到 App 默认界面）。
+
+**注意**：`view` 名字没被宿主注册时，卡片**不会**出现「打开」按钮（不会给一个点进去空白的入口）。
+所以新增原生界面的模块必须同步在宿主里注册同名视图，两边名字要一致。
+同时声明 `webroot` 与 `ui` 时宿主优先用原生界面（校验器会警告）。
+
+### 2.8 `requires` — 声明需要的宿主能力
+
+模块想用宿主能力（沙盒外读写、改系统设置、枚举进程…）时，在这里声明，**不要自己重写一套漏洞利用**：
+
+```json
+"requires": ["fs.read", "fs.write", "sys.supervised.set"]
+```
+
+宿主装载时校验：**缺任何一项 ⇒ 模块标记为「不可用」**，卡片上橙字显示缺哪一项，
+执行与打开按钮全部禁用。这样能力缺失是**装载期可见**的，而不是点下去才在运行时静默失败。
+
+当前宿主能力清单（`escape.host.v1`）：
+
+| 能力 | 说明 | 限制 |
+|---|---|---|
+| `host.version` | 宿主版本 / build 号 | — |
+| `host.capabilities` | 列出本机实际支持的能力 | — |
+| `fs.read` | 读文件（沙盒外走漏洞利用） | 单文件 |
+| `fs.write` | 写文件（沙盒外走漏洞利用） | 单文件 |
+| `fs.delete` | 删文件（沙盒外走漏洞利用） | 单文件 |
+| `fs.exists` | 判存在 | 沙盒外靠「能不能读」判断 |
+| `fs.list` | 列目录 | ⚠️ **仅 App 沙盒内**；沙盒外无法枚举（漏洞利用只能操作单个文件） |
+| `sys.supervised.get` | 读监督模式状态 | — |
+| `sys.supervised.set` | 开关监督模式（改 `CloudConfigurationDetails.plist` 的 `IsSupervised`） | — |
+| `proc.list` | 列出进程 | — |
+| `proc.signal` | 给进程发信号 | 只认 SIGKILL / SIGSTOP / SIGCONT |
+| `notify.post` | 发本地通知 | 需用户已授权通知 |
+| `exploit.status` | 查漏洞利用可用性 | — |
+
+调用方式：模块加载时宿主会把一张 **C 函数表**（`EscapeHostAPI`）交给模块的
+`escape_module_init(const EscapeHostAPI *api)` 导出（可选导出，返回 0 表示接受）。
+函数表里有 `call(capability, json_args, &out_json)`，JSON 进 JSON 出，二进制数据用 base64。
+**新增能力只需要改宿主**，清单、校验器、已有模块都不用动。
+
+> `requires` 里写了当前宿主不认识的能力 → 校验器给**警告**（不是错误），
+> 因为宿主会自己门禁，而 CI 不该因为宿主将来加了能力就卡住旧清单。
+
+### 2.9 签名规则（重要）
 
 | 模块形态 | 是否需要 `signature.sig` |
 |---|---|
@@ -238,9 +304,10 @@ python3 validate.py modules/com.escapeos.alist/module.json --skip-signature
 - 必填字段、`spec` 版本、`id` 反向域名格式且与目录名一致、`version` / `minHostVersion` 是 semver
 - 动作 `id` 唯一、`label` 非空、`type` 是 `signal` / `bridge`（预留类型报错）
 - `signal` 有 `process` 且信号名被宿主识别；`bridge` 有 `symbol`，`args` ≤ 2 个
-- `binary` / `lua` / `hotfix` / `webroot` 各子结构，以及对应文件是否真的存在
+- `binary` / `lua` / `hotfix` / `webroot` / `ui` 各子结构，以及对应文件是否真的存在
+- `requires` 里的能力名是否在当前宿主已知清单内（未知给警告）
 - `signature.sig` 是否存在、是否合法 base64、是否 64 字节
-- 容易踩的坑给 warning：`accent` 拼错、`args` 想写 `dataDir` 却写成 `DataDir`、用了 `randomPassword` 但 `success` 里没有 `{0}`
+- 容易踩的坑给 warning：`accent` 拼错、`args` 想写 `dataDir` 却写成 `DataDir`、用了 `randomPassword` 但 `success` 里没有 `{0}`、同时声明 `webroot` 与 `ui`
 
 退出码：`0` 合法 / `1` 非法。参数：`--strict`、`--skip-signature`。
 
@@ -274,29 +341,30 @@ python3 validate.py modules/com.escapeos.alist/module.json --skip-signature
 
 ## 7. 设计方向（尚未实现，勿在清单里使用）
 
-当前模块**只能被宿主调用**，不能反向调用宿主能力。这意味着任何需要「沙盒外读写 / 提权 / 系统设置」的模块，
-都得自己把整套漏洞利用重写一遍——这是重复劳动，也是模块之间耦合的根源。
+### 7.1 `bridge.args` 泛化
 
-方向是给宿主加一层稳定的 **C ABI 能力接口**（`escape.host.v1`）：
+现在的 `args` 是**宿主关键字数组**（`randomPassword` / `dataDir` / `moduleDir`），
+其中 `randomPassword` / `dataDir` 目前只有 alist 一个模块在用 —— 这是宿主代码里为单个模块
+开的专属口子，属于「为模块适配接口」的反面教材。
 
-```c
-// 宿主导出（模块 dlsym(RTLD_DEFAULT, ...) 即可拿到，无需链接）
-int   escape_host_abi_version(void);
-int   escape_host_call(const char *capability, const char *json_args, char **out_json);
-void  escape_host_free(char *p);
+方向：`args` 改成 JSON 对象 + `$` 变量，宿主不再需要认识每个模块的参数：
+
+```json
+"args": { "length": 8, "dir": "$dataDir", "tag": "$random:12" }
 ```
 
-- 单一入口 + JSON 进出 ⇒ **加新能力只改宿主**，清单、校验器、已有模块都不用动
-- 能力按命名空间分：`fs.read` / `fs.write` / `fs.delete` / `fs.list` / `exploit.*` / `sys.supervised.set` / `proc.list` / `notify.post` …
-- 清单侧加 `"requires": ["fs.read", "fs.write"]`，宿主装载时校验；能力缺失就**不启用**，而不是运行时静默失败
-- 模块因此不关心底层是哪个漏洞（bad_query / airlift / 将来的新链）——宿主负责选路与降级
+变量命名空间由宿主解析（`$dataDir` / `$moduleDir` / `$random:N` / `$now` …），
+模块也可以直接写自己的字面量。新增变量是宿主侧加法，清单无需改动。
 
-配套要改的清单字段（规划）：
+### 7.2 已落地：宿主能力接口 + 原生界面
 
-| 字段 | 作用 |
-|---|---|
-| `requires` | 声明所需宿主能力；缺失则模块不可用 |
-| `bridge.args` 泛化 | 从「宿主关键字数组」改为 JSON 对象 + `$dataDir` / `$moduleDir` / `$random:N` 变量，宿主不再需要认识每个模块的参数 |
-| `ui` | 模块自带原生 SwiftUI 页面（而非 webroot），进模块是二级独立界面 |
+`requires`（§2.8）与 `ui`（§2.7）就是为解决「模块必须反向调用宿主」这个缺口加的，
+宿主从 v0.3.481 起支持。在此之前，需要沙盒外读写或改系统设置的模块只能自己重写整套漏洞利用。
 
-在此之前，请只用本文档 §2 已列出的字段。
+关键收益：模块调 `fs.read` 时**根本不关心底层是 bad_query 还是 airlift**——
+将来漏洞链被替换，模块零改动。这就是「装上就天衣无缝」的接缝所在。
+
+### 7.3 待办
+
+- `minHostVersion` 目前宿主只是读进来存着，**没有真正强制**（v0.3.481 起开始强制）
+- `fs.list` 沙盒外无法枚举目录（漏洞利用只支持单文件），需要宿主侧补一个目录枚举通道

@@ -40,6 +40,31 @@ dylib 是 dlopen 进宿主进程的。`entrySymbol` 默认不用写——引擎�
 
 `webroot/index.html` 必须有。
 
+### 5. 原生 SwiftUI 界面（`ui`，推荐优先用）
+
+```json
+"ui": { "style": "native", "view": "your-module", "title": "你的模块" }
+```
+
+进模块是一个**全屏二级独立界面**：底部是模块自己的导航栏（不是 App 默认底栏），
+左上角常驻「返回上一级」+「主页」。
+
+⚠️ **`view` 只是注册名**——真正的 SwiftUI 视图必须编译进宿主
+（`EscapeOS/Views/ModuleUI/`，用 `ModuleUIRegistry.shared.register(...)` 注册）。
+名字没注册 ⇒ 卡片不显示「打开」按钮。所以加原生界面的模块要**两边同步改**。
+
+### 6. 声明需要的宿主能力（`requires`）
+
+要读写沙盒外文件、改系统设置、枚举进程时，**不要自己重写漏洞利用**，声明能力就行：
+
+```json
+"requires": ["fs.read", "fs.write", "sys.supervised.set"]
+```
+
+宿主装载时校验，缺任何一项模块就标记为不可用（卡片橙字显示缺哪项）。
+能力清单见仓库 README §2.8。模块侧在 `escape_module_init` 里拿到函数表后
+调 `call("fs.read", "{\"path\":\"/var/...\"}", &out)`。
+
 ## bridge 动作怎么写
 
 ```json

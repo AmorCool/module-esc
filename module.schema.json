@@ -90,9 +90,46 @@
         }
       }
     },
+    "requires": {
+      "type": "array",
+      "description": "声明需要的宿主能力（escape.host.v1）。宿主装载时校验，缺任何一项则模块不可用（卡片显示缺哪一项，不给执行入口）",
+      "items": {
+        "type": "string",
+        "enum": [
+          "host.version",
+          "host.capabilities",
+          "fs.read",
+          "fs.write",
+          "fs.delete",
+          "fs.exists",
+          "fs.list",
+          "sys.supervised.get",
+          "sys.supervised.set",
+          "proc.list",
+          "proc.signal",
+          "notify.post",
+          "exploit.status"
+        ]
+      }
+    },
+    "ui": {
+      "type": "object",
+      "description": "原生 SwiftUI 界面（视图实现必须编译进宿主，这里只声明注册名）",
+      "required": ["style", "view"],
+      "additionalProperties": false,
+      "properties": {
+        "style": { "enum": ["native"] },
+        "view": {
+          "type": "string",
+          "description": "宿主内的视图注册名，如 airlift-poc",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "title": { "type": "string", "description": "二级界面标题；为空则用模块 name" }
+      }
+    },
     "actions": {
       "type": "array",
-      "description": "普通模块不能为空；binary / lua 模块可以为空",
+      "description": "普通模块不能为空；binary / lua / 原生界面(ui) 模块可以为空",
       "items": {
         "type": "object",
         "required": ["id", "label", "type"],

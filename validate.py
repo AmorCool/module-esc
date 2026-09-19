@@ -66,6 +66,28 @@ ACCENTS = {
 # 热补丁 patch 类型（HotfixService.reload）
 HOTFIX_PATCH_TYPES = {"feature_flag", "text"}
 
+# 宿主能力清单（escape.host.v1，见 HostCapabilityService.capabilityList）
+# 模块在 requires 里声明；宿主装载时校验，缺任何一项 ⇒ 模块不可用。
+# 注意：这里是「当前宿主已知的能力」，将来宿主加能力要同步改这一份。
+KNOWN_CAPABILITIES = {
+    "host.version",
+    "host.capabilities",
+    "fs.read",
+    "fs.write",
+    "fs.delete",
+    "fs.exists",
+    "fs.list",
+    "sys.supervised.get",
+    "sys.supervised.set",
+    "proc.list",
+    "proc.signal",
+    "notify.post",
+    "exploit.status",
+}
+
+# 原生界面形态（module.json "ui".style）
+UI_STYLES = {"native"}
+
 
 class Report:
     def __init__(self) -> None:
@@ -124,13 +146,13 @@ def check_signature(module_dir: str, rep: Report, skip: bool = False) -> None:
         rep.err(f"signature.sig 解出 {len(raw)} 字节，ed25519 签名应为 64 字节")
 
 
-def check_actions(actions, has_binary: bool, has_lua: bool, rep: Report) -> None:
+def check_actions(actions, has_binary: bool, allows_empty: bool, rep: Report) -> None:
     if not isinstance(actions, list):
         rep.err("actions 必须为数组")
         return
     if not actions:
-        if not (has_binary or has_lua):
-            rep.err("普通模块 actions 不能为空（binary / lua 模块除外）")
+        if not allows_empty:
+            rep.err("普通模块 actions 不能为空（binary / lua / 原生界面模块除外）")
         return
 
     seen_ids = set()
@@ -320,6 +342,49 @@ def check_webroot(webroot, module_dir: str, rep: Report) -> None:
         rep.err(f"webroot 目录缺少 index.html: {webroot}/index.html")
 
 
+def check_requires(requires, rep: Report) -> None:
+    """模块声明的宿主能力（escape.host.v1）。
+
+    未知能力只给警告不给错误：宿主装载时会自己门禁（模块显示为「缺少宿主能力」，
+    不会静默失败），而 CI 不该因为宿主将来加了能力就卡住旧清单。
+    """
+    if not isinstance(requires, list):
+        rep.err("requires 必须为数组（宿主能力名列表）")
+        return
+    seen = set()
+    for idx, cap in enumerate(requires):
+        if not is_nonempty_str(cap):
+            rep.err(f"requires[{idx}] 必须是非空字符串")
+            continue
+        if cap in seen:
+            rep.warn(f"requires 里 {cap} 重复声明")
+        seen.add(cap)
+        if cap not in KNOWN_CAPABILITIES:
+            rep.warn(
+                f"requires 里的 {cap!r} 不在当前宿主已知能力清单内"
+                f"（宿主会因此把模块标记为「缺少宿主能力」而不可用；"
+                f"若这是新能力，需要先发宿主版本）"
+            )
+
+
+def check_ui(ui, rep: Report) -> None:
+    """原生 SwiftUI 界面声明（module.json "ui"）。"""
+    if not isinstance(ui, dict):
+        rep.err("ui 必须是对象")
+        return
+    style = ui.get("style")
+    if not is_nonempty_str(style):
+        rep.err("ui.style 不能为空")
+    elif style not in UI_STYLES:
+        rep.err(f"ui.style={style!r} 不支持（目前仅 {' / '.join(sorted(UI_STYLES))}）")
+    if not is_nonempty_str(ui.get("view")):
+        rep.err("ui.view 不能为空（宿主内的视图注册名，如 \"airlift-poc\"）")
+    elif not re.match(r"^[a-z0-9][a-z0-9._-]*$", ui["view"]):
+        rep.warn(f"ui.view={ui['view']!r} 建议用小写字母/数字/连字符（如 airlift-poc）")
+    if ui.get("title") is not None and not is_str(ui["title"]):
+        rep.err("ui.title 必须是字符串")
+
+
 def check_manifest(path: str, strict: bool, skip_signature: bool = False) -> int:
     module_dir = os.path.dirname(os.path.abspath(path))
     try:
@@ -378,8 +443,9 @@ def check_manifest(path: str, strict: bool, skip_signature: bool = False) -> int
     has_lua = "lua" in m
     has_hotfix = "hotfix" in m
     has_webroot = "webroot" in m
+    has_ui = "ui" in m
 
-    check_actions(m.get("actions"), has_binary, has_lua, rep)
+    check_actions(m.get("actions"), has_binary, has_lua or has_ui, rep)
     if has_binary:
         check_binary(m["binary"], rep)
     if has_lua:
@@ -388,7 +454,13 @@ def check_manifest(path: str, strict: bool, skip_signature: bool = False) -> int
         check_hotfix(m["hotfix"], module_dir, rep)
     if has_webroot:
         check_webroot(m["webroot"], module_dir, rep)
+    if has_ui:
+        check_ui(m["ui"], rep)
+    if "requires" in m:
+        check_requires(m["requires"], rep)
 
+    if has_webroot and has_ui:
+        rep.warn("同时声明了 webroot 与 ui——宿主优先用原生界面，webroot 不会展示")
     if has_binary and has_lua:
         rep.warn("同时声明了 binary 与 lua——宿主优先走 binary，lua 不会被执行")
     if has_binary or has_hotfix:
@@ -415,10 +487,15 @@ def check_manifest(path: str, strict: bool, skip_signature: bool = False) -> int
         kinds.append("hotfix")
     if has_webroot:
         kinds.append("webroot")
+    if has_ui:
+        kinds.append("native-ui")
     kind_txt = f"，类型 {'+'.join(kinds)}" if kinds else ""
+    req_txt = ""
+    if isinstance(m.get("requires"), list) and m["requires"]:
+        req_txt = f"，需要能力 {len(m['requires'])} 项"
     print(
         f"清单合法: {mid} v{m['version']} "
-        f"({len(m['actions'])} 个动作{kind_txt})"
+        f"({len(m['actions'])} 个动作{kind_txt}{req_txt})"
     )
     return 0
 
