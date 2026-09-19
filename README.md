@@ -1,28 +1,42 @@
 # module-esc
 
-EscapeSpace 模块仓库——存放模块定义（`escape.module.v1` 规范），CI 自动打包 `.zip` 发布。
-
-## 这是什么
-
-模块是**声明式清单**（`module.json`），不含可执行代码。宿主 app（EscapeSpace）解析清单并通过
-Rust FFI 管道执行动作（如按进程名查找 PID 并下发信号）。因此本仓库只做：
-
-1. 存放模块定义：`modules/<模块id>/module.json`（可选 `webroot/` 网页界面）
-2. CI 校验清单 + 打包 `.zip` + 发布到 [Release](../../releases)（edge 预发布，每次 push 更新）
+EscapeSpace 模块仓库——存放模块定义（`escape.module.v1` 规范），CI 自动校验 + 打包 `.zip` + 发布到 [Release](../../releases)（`edge` 预发布，每次 push 更新）。
 
 IPA 编译在 [EscapeOS 主仓库](https://github.com/AmorCool/EscapeOS)进行，与本仓库无关。
 
-## 模块 .zip 结构
+---
+
+## 1. 模块是什么
+
+模块 = **一个目录 + 一份清单**：
 
 ```
-com.example.mymodule.zip
-└── com.example.mymodule/
-    ├── module.json          # 必须：模块清单
-    └── webroot/             # 可选：WebView 界面（含 index.html）
-        └── index.html
+modules/com.example.mymodule/
+├── module.json          # 必须：声明式清单
+├── signature.sig        # 条件必须：含 binary / hotfix 时由 CI 生成（不要手写、不要提交）
+├── webroot/             # 可选：WKWebView 界面（必须含 index.html）
+│   └── index.html
+├── bin/                 # 可选：binary 模块的 dylib（CI 构建产物）
+│   └── openlist.dylib
+├── main.lua             # 可选：lua 模块的入口脚本
+└── hotfix.js            # 可选：hotfix 模块的 JS 补丁
 ```
 
-## module.json 规范（escape.module.v1）
+清单本身是纯数据；可执行逻辑都在**载荷**里，由宿主按 `binary` / `lua` / `hotfix` / `webroot` 四个可选键决定怎么加载。
+
+宿主解析清单后，动作（`actions[]`）通过两种通道执行：
+
+| 通道 | 宿主实现 | 说明 |
+|---|---|---|
+| `signal` | `ModuleService.runSignal()` | 按进程名模糊匹配 → 查 PID → 下发信号 |
+| `bridge` | `BinaryModuleRunner.bridgeCall()` | `dlsym` 到模块 dylib 的导出符号，直接 C 调用 |
+
+> `binary` 模块的 dylib 是 **dlopen 进宿主进程**（同一地址空间，不是独立进程），
+> 所以 `bridge` 是一次同步 C 函数调用。
+
+---
+
+## 2. module.json 规范（escape.module.v1）
 
 ```json
 {
@@ -37,7 +51,7 @@ com.example.mymodule.zip
   "description": "模块功能描述（卡片显示）",
   "notes": "注意事项（橙色小字，可选）",
   "category": "系统维护",
-  "minHostVersion": "0.3.56",
+  "minHostVersion": "0.3.480",
   "actions": [
     {
       "id": "main",
@@ -53,23 +67,236 @@ com.example.mymodule.zip
 }
 ```
 
-### 动作类型
+### 2.1 顶层字段
+
+| 字段 | 必填 | 类型 | 说明 |
+|---|---|---|---|
+| `spec` | ✅ | string | 固定 `"escape.module.v1"` |
+| `id` | ✅ | string | 反向域名，**必须与目录名一致**（小写字母/数字/连字符，≥2 段） |
+| `name` | ✅ | string | 卡片标题 |
+| `version` | ✅ | string | semver，如 `1.2.3`；zip 文件名用它 |
+| `versionCode` | ⬜ | int | 正整数，用于版本比较 |
+| `description` | ✅ | string | 卡片描述 |
+| `actions` | ✅ | array | 动作列表；普通模块不能为空，`binary` / `lua` 模块可以为空 |
+| `icon` | ⬜ | string | SF Symbol 名，如 `gearshape.fill` |
+| `accent` | ⬜ | string | 主题色名（见下），未知值回退为 `blue` |
+| `author` | ⬜ | string | 作者 |
+| `notes` | ⬜ | string | 卡片上的橙色注意事项 |
+| `category` | ⬜ | string | 分类（如 `系统维护` / `本地服务`） |
+| `minHostVersion` | ⬜ | string | 需要的最低宿主版本（semver） |
+| `webroot` | ⬜ | string | 模块目录内的 WebView 目录名（须含 `index.html`） |
+| `binary` | ⬜ | object | 二进制模块（随宿主自启动的后台服务，如 OpenList） |
+| `lua` | ⬜ | object | Lua 脚本模块（`{"entry": "main.lua"}`，纯数据、无签名要求） |
+| `hotfix` | ⬜ | object | 热补丁模块（声明式 patch + 可选 JS 脚本） |
+
+已知 `accent`：`blue` `green` `orange` `red` `purple` `pink` `teal` `indigo` `yellow` `gray` `mint` `cyan` `brown`
+
+### 2.2 动作类型
 
 | type | 说明 | 状态 |
 |---|---|---|
-| `signal` | 按进程名模糊匹配 → 查 PID → 下发信号（SIGKILL/SIGSTOP/SIGCONT，SIGTERM 映射为 SIGKILL） | ✅ v1 支持 |
+| `signal` | 按进程名模糊匹配 → 查 PID → 下发信号 | ✅ 已支持 |
+| `bridge` | 调用模块 dylib 导出符号（通用桥，语义由模块自定义） | ✅ 已支持 |
 | `kill_top_memory` | 结束内存占用最高的后台应用（前台应用豁免） | 🔜 接口预留 |
 | `notify` | 本地通知 | 🔜 接口预留 |
 | `script` | 设备侧脚本 | 🔜 接口预留 |
 
-## 使用方法
+> ⚠️ **预留类型写进清单会被 CI 拒绝**——宿主尚未实现，装了也不会执行。
+> 需要自定义语义时统一写 `"type": "bridge"` + `"symbol": "..."`。
+>
+> 宿主对 `type` 的真实判断只有一句「是不是 `signal`」：**任何非 `signal` 的值都走 bridge 通道**，
+> 所以历史上用别的名字也能跑；但请只用 `bridge`，校验器也只认它。
+
+#### `signal` 动作字段
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `process` | ✅ | 进程名，对 `displayName` / `executablePath` 做**大小写不敏感包含匹配** |
+| `signal` | ⬜ | `SIGKILL`（默认）/ `SIGSTOP`（暂停）/ `SIGCONT`（恢复）。`SIGTERM` 按 kill 语义映射 |
+
+#### `bridge` 动作字段
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `symbol` | ✅ | 模块 dylib 的导出符号名（`dlsym`）。宿主先在已加载 dylib 里找，再全局找 |
+| `args` | ⬜ | **实参来源声明**数组，按序对应符号参数（见下）。**最多 2 个**——宿主 `bridgeCall` 只实现 0/1/2 参 |
+| `success` | ⬜ | 成功消息模板，`{0}`/`{1}` 会被替换为**实际**实参值。缺省为「执行成功」 |
+| `marksStopped` | ⬜ | `true` 时宿主执行成功后清掉「运行中」状态（停止类动作需要） |
+
+`args[]` 的取值：
+
+| 写法 | 含义 |
+|---|---|
+| `randomPassword` | 生成 8 位随机密码（已去掉易混淆字符 `0O1lI`） |
+| `dataDir` | 模块数据目录 `<Modules>/<id>/data` |
+| `moduleDir` | 模块目录 `<Modules>/<id>` |
+| `str:xxx` | 字面量 `xxx` |
+| 其它字符串 | 原样字面量（容易写错，校验器会警告） |
+
+> 用 `randomPassword` 时**务必**在 `success` 里带上 `{0}`，否则生成的密码不会显示给用户。
+> 例：`"success": "管理员密码已重置: {0}\n旧密码与登录会话已失效。"`
+
+#### 通用字段（两种类型都可用）
+
+| 字段 | 说明 |
+|---|---|
+| `id` | 动作唯一标识（模块内不可重复） |
+| `label` | 按钮文案 |
+| `icon` | SF Symbol 名 |
+| `confirm` | 执行前确认弹窗文案；为空直接执行 |
+| `timeoutSec` | 超时秒数（预留） |
+
+### 2.3 `binary` 模块
+
+随宿主加载的后台服务（如 OpenList）。**含 `binary` 的模块必须带 `signature.sig`。**
+
+```json
+"binary": {
+  "executable": "bin/openlist.dylib",
+  "args": ["server", "--data", "data"],
+  "port": 5244,
+  "webPath": "/",
+  "autoStart": true,
+  "entrySymbol": "openlist_embed"
+}
+```
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `executable` | ✅ | 相对模块目录的可执行文件/dylib 路径（禁止绝对路径与 `..`） |
+| `args` | ⬜ | 启动参数；相对路径会在启动时自动拼上模块目录 |
+| `port` | ⬜ | WebUI 端口（1-65535），宿主据此拼 `http://127.0.0.1:<port>` |
+| `webPath` | ⬜ | WebUI 路径，默认 `/`，必须以 `/` 开头 |
+| `autoStart` | ⬜ | 是否随宿主自启动 |
+| `entrySymbol` | ⬜ | 入口符号名。**默认不填**——引擎自动扫描 dylib 符号表里 `*Main` 结尾的导出；只有需要显式指定时才声明 |
+
+> 内置 binary 模块（如 alist）**不落盘**：直接从 app bundle 原地加载，数据目录仍在 `Documents/Modules/<id>/data`。
+
+### 2.4 `lua` 模块
+
+纯脚本模块，走内置 Rust + mlua 解释器，**无签名要求**。
+
+```json
+"lua": { "entry": "main.lua" }
+```
+
+`entry` 缺省为 `main.lua`，必须是模块目录内的相对路径。
+
+### 2.5 `hotfix` 模块
+
+声明式热补丁 + 可选 JS 脚本。**含 `hotfix` 的模块必须带 `signature.sig`。**
+
+```json
+"hotfix": {
+  "script": "hotfix.js",
+  "patches": [
+    { "type": "feature_flag", "key": "someFeature", "value": true },
+    { "type": "text", "key": "someLabel", "value": "替换后的文案" }
+  ]
+}
+```
+
+`patches[].type` 仅支持 `feature_flag`（`value` 为布尔）与 `text`（`value` 为字符串）。
+
+### 2.6 `webroot` 模块
+
+模块自带 WKWebView 界面，对齐 KernelSU 的 webroot 机制。目录内**必须**有 `index.html`。
+
+```json
+"webroot": "webroot"
+```
+
+### 2.7 签名规则（重要）
+
+| 模块形态 | 是否需要 `signature.sig` |
+|---|---|
+| 纯 `actions`（signal / bridge） | ❌ 不需要 |
+| `lua` | ❌ 不需要 |
+| `binary` | ✅ 需要 |
+| `hotfix` | ✅ 需要 |
+
+- 算法：**ed25519**，对 `module.json` 的**原文字节**签名（不是先哈希再签）
+- 格式：base64 **单行**文本，文件名 `signature.sig`，与 `module.json` **同目录**
+- **CI 自动生成，不要手写、也不要提交到仓库**（`package.yml` 的 Sign 步骤先于 Validate 步骤，保证校验时文件已存在）
+- 校验失败或缺失 → 宿主**拒绝导入**
+- 私钥是仓库 secret `HOTFIX_PRIVATE_KEY`；未配置时 CI 会**直接失败**（而不是悄悄产出一个装不上的 zip）
+
+---
+
+## 3. 本地自检
+
+```bash
+# 全量校验（--strict：警告也算错，建议本地用）
+for d in modules/*/; do python3 validate.py "$d/module.json" --strict; done
+
+# binary/hotfix 模块本地还没签名时，跳过签名检查
+python3 validate.py modules/com.escapeos.alist/module.json --skip-signature
+```
+
+`validate.py` 检查的内容（逐条对照宿主真实实现，不是猜的）：
+
+- 必填字段、`spec` 版本、`id` 反向域名格式且与目录名一致、`version` / `minHostVersion` 是 semver
+- 动作 `id` 唯一、`label` 非空、`type` 是 `signal` / `bridge`（预留类型报错）
+- `signal` 有 `process` 且信号名被宿主识别；`bridge` 有 `symbol`，`args` ≤ 2 个
+- `binary` / `lua` / `hotfix` / `webroot` 各子结构，以及对应文件是否真的存在
+- `signature.sig` 是否存在、是否合法 base64、是否 64 字节
+- 容易踩的坑给 warning：`accent` 拼错、`args` 想写 `dataDir` 却写成 `DataDir`、用了 `randomPassword` 但 `success` 里没有 `{0}`
+
+退出码：`0` 合法 / `1` 非法。参数：`--strict`、`--skip-signature`。
+
+---
+
+## 4. 新增模块流程
+
+1. 复制 `templates/starter/` 到 `modules/<你的模块id>/`，改 `module.json`
+   （目录名必须等于 `id`；`templates/` 不在 `modules/` 下，不会被 CI 打包）
+2. 本地跑一遍 `validate.py --strict`
+3. push 到 `main` → CI 自动：签名 → 校验 → 打包 → 发到 `edge` Release
+4. 手机导入 `.zip` 验证
+
+## 5. 使用模块
 
 1. 到 [Release (edge)](../../releases) 下载想要的模块 `.zip`
-2. EscapeSpace → 模块 → 右上角导入 → 选择 .zip
+2. EscapeSpace → 模块 → 右上角导入 → 选择 `.zip`
 3. 卡片上点「执行」
 
-## 新增模块流程
+## 6. CI 工作流
 
-1. `modules/<新模块id>/module.json` +（可选）`webroot/`
-2. push 到 main → CI 自动校验 + 打包 + 发到 edge Release
-3. 手机导入 .zip 验证
+| 工作流 | 触发 | 作用 |
+|---|---|---|
+| `package.yml` | push `main` / 手动 | 签名（binary+hotfix）→ 校验全部清单 → 打包 zip → 发 `edge` 预发布 |
+| `build-alist.yml` | 手动 | 交叉编译 OpenList 为 iOS arm64 dylib + 签名 + 单独发 `edge`（`package.yml` 会跳过 `com.escapeos.alist`，避免空壳 zip 覆盖完整包） |
+
+> `build-alist.yml` 从 EscapeOS 仓库 `migrate-xcode` 分支拉 `sapbridge/openlist.go` 与 `patch_stages.py`；
+> 若该分支被删或改名，alist 构建会失败——改分支时记得同步这个 workflow。
+
+---
+
+## 7. 设计方向（尚未实现，勿在清单里使用）
+
+当前模块**只能被宿主调用**，不能反向调用宿主能力。这意味着任何需要「沙盒外读写 / 提权 / 系统设置」的模块，
+都得自己把整套漏洞利用重写一遍——这是重复劳动，也是模块之间耦合的根源。
+
+方向是给宿主加一层稳定的 **C ABI 能力接口**（`escape.host.v1`）：
+
+```c
+// 宿主导出（模块 dlsym(RTLD_DEFAULT, ...) 即可拿到，无需链接）
+int   escape_host_abi_version(void);
+int   escape_host_call(const char *capability, const char *json_args, char **out_json);
+void  escape_host_free(char *p);
+```
+
+- 单一入口 + JSON 进出 ⇒ **加新能力只改宿主**，清单、校验器、已有模块都不用动
+- 能力按命名空间分：`fs.read` / `fs.write` / `fs.delete` / `fs.list` / `exploit.*` / `sys.supervised.set` / `proc.list` / `notify.post` …
+- 清单侧加 `"requires": ["fs.read", "fs.write"]`，宿主装载时校验；能力缺失就**不启用**，而不是运行时静默失败
+- 模块因此不关心底层是哪个漏洞（bad_query / airlift / 将来的新链）——宿主负责选路与降级
+
+配套要改的清单字段（规划）：
+
+| 字段 | 作用 |
+|---|---|
+| `requires` | 声明所需宿主能力；缺失则模块不可用 |
+| `bridge.args` 泛化 | 从「宿主关键字数组」改为 JSON 对象 + `$dataDir` / `$moduleDir` / `$random:N` 变量，宿主不再需要认识每个模块的参数 |
+| `ui` | 模块自带原生 SwiftUI 页面（而非 webroot），进模块是二级独立界面 |
+
+在此之前，请只用本文档 §2 已列出的字段。

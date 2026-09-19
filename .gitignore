@@ -1,0 +1,17 @@
+# CI 生成，不要提交（每次构建重新签，提交会造成 module.json 改了但签名没跟上的假象）
+modules/*/signature.sig
+
+# 二进制构建产物（100MB 级，由 build-alist.yml 在 CI 里产出后直接打包）
+modules/*/bin/*
+!modules/*/bin/.gitkeep
+
+# 模块运行时数据 / 日志
+modules/*/data/
+modules/*/run.log
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc

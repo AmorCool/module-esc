@@ -1,0 +1,27 @@
+{
+  "$schema": "../../module.schema.json",
+  "spec": "escape.module.v1",
+  "id": "com.example.starter",
+  "name": "示例模块",
+  "icon": "gearshape.fill",
+  "accent": "blue",
+  "version": "1.0.0",
+  "versionCode": 1,
+  "author": "你的名字",
+  "description": "把这个目录复制到 modules/<你的模块id>/ 然后改这里。目录名必须等于 id。",
+  "notes": "可选：卡片上的橙色注意事项。",
+  "category": "系统维护",
+  "minHostVersion": "0.3.480",
+  "actions": [
+    {
+      "id": "main",
+      "label": "执行动作",
+      "icon": "play.fill",
+      "type": "signal",
+      "process": "locationd",
+      "signal": "SIGKILL",
+      "confirm": "确定执行？",
+      "timeoutSec": 10
+    }
+  ]
+}

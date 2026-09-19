@@ -1,0 +1,9 @@
+# 统一换行：CI 跑在 Linux，CRLF 会让 shell 脚本 / python 的 shebang 出问题
+* text=auto eol=lf
+
+# 二进制
+*.png binary
+*.jpg binary
+*.dylib binary
+*.a binary
+*.sig binary

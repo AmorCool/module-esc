@@ -136,11 +136,17 @@ jobs:
           rm -f sig.bin
           echo "✍ manifest 已签名"
 
+      - name: Validate manifest
+        run: python3 validate.py modules/com.escapeos.alist/module.json
+
       - name: Package module zip
         run: |
           mkdir -p dist
           ver=$(python3 -c "import json;print(json.load(open('modules/com.escapeos.alist/module.json',encoding='utf-8'))['version'])")
+          # signature.sig 必须留在 zip 内（宿主导入时验签）
           zip -r "dist/com.escapeos.alist-v${ver}.zip" modules/com.escapeos.alist -x '*/data/*' '*/run.log'
+          unzip -l "dist/com.escapeos.alist-v${ver}.zip" | grep -qE 'signature\.sig$' || { echo "❌ zip 内缺少 signature.sig"; exit 1; }
+          unzip -l "dist/com.escapeos.alist-v${ver}.zip" | grep -qE 'module\.json$' || { echo "❌ zip 内缺少 module.json"; exit 1; }
           ls -la dist/
 
       - name: Upload artifact

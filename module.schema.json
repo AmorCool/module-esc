@@ -1,0 +1,134 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/AmorCool/module-esc/main/module.schema.json",
+  "title": "escape.module.v1 模块清单",
+  "description": "EscapeSpace 模块清单规范。与 validate.py 保持一致；改字段时两处必须同时改。",
+  "type": "object",
+  "required": ["spec", "id", "name", "version", "description", "actions"],
+  "additionalProperties": true,
+  "properties": {
+    "spec": {
+      "const": "escape.module.v1"
+    },
+    "id": {
+      "type": "string",
+      "description": "反向域名，必须与目录名一致",
+      "pattern": "^[a-z0-9][a-z0-9-]*(\\.[a-z0-9][a-z0-9-]*)+$"
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "icon": { "type": "string", "description": "SF Symbol 名，如 gearshape.fill" },
+    "accent": {
+      "type": "string",
+      "description": "主题色名；未知值宿主回退为 blue",
+      "enum": [
+        "blue", "green", "orange", "red", "purple", "pink", "teal",
+        "indigo", "yellow", "gray", "mint", "cyan", "brown"
+      ]
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.\\-]+)?$"
+    },
+    "versionCode": { "type": "integer", "minimum": 1 },
+    "author": { "type": "string" },
+    "description": { "type": "string", "minLength": 1 },
+    "notes": { "type": "string", "description": "卡片上的橙色注意事项" },
+    "category": { "type": "string" },
+    "minHostVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.\\-]+)?$"
+    },
+    "webroot": {
+      "type": "string",
+      "description": "模块目录内的 WebView 目录名（须含 index.html）",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "lua": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "entry": {
+          "type": "string",
+          "default": "main.lua",
+          "description": "模块目录内的入口脚本相对路径"
+        }
+      }
+    },
+    "binary": {
+      "type": "object",
+      "required": ["executable"],
+      "additionalProperties": false,
+      "properties": {
+        "executable": {
+          "type": "string",
+          "description": "相对模块目录的可执行文件/dylib 路径",
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+        },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "webPath": { "type": "string", "pattern": "^/" },
+        "autoStart": { "type": "boolean" },
+        "entrySymbol": { "type": "string", "minLength": 1 }
+      }
+    },
+    "hotfix": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "script": { "type": "string", "description": "JS 补丁文件名，默认 hotfix.js" },
+        "patches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type", "key", "value"],
+            "properties": {
+              "type": { "enum": ["feature_flag", "text"] },
+              "key": { "type": "string", "minLength": 1 },
+              "value": { "type": ["boolean", "string"] }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "description": "普通模块不能为空；binary / lua 模块可以为空",
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "type"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "label": { "type": "string", "minLength": 1 },
+          "icon": { "type": "string" },
+          "type": {
+            "description": "宿主只特判 signal；bridge 是通用桥。预留类型（kill_top_memory/notify/script）不可使用",
+            "enum": ["signal", "bridge"]
+          },
+          "process": { "type": "string", "description": "signal：进程名，大小写不敏感包含匹配" },
+          "signal": { "enum": ["SIGKILL", "SIGSTOP", "SIGCONT", "SIGTERM"] },
+          "symbol": { "type": "string", "description": "bridge：模块 dylib 导出符号名" },
+          "args": {
+            "type": "array",
+            "maxItems": 2,
+            "description": "bridge：实参来源声明，宿主只消费前 2 个",
+            "items": {
+              "type": "string",
+              "examples": ["randomPassword", "dataDir", "moduleDir", "str:字面量"]
+            }
+          },
+          "success": {
+            "type": "string",
+            "description": "成功消息模板，{0}/{1} 替换为实际实参值"
+          },
+          "marksStopped": {
+            "type": "boolean",
+            "description": "成功后宿主清掉「运行中」状态"
+          },
+          "confirm": { "type": "string", "description": "执行前确认文案；为空直接执行" },
+          "timeoutSec": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}
