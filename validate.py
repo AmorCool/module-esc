@@ -85,6 +85,7 @@ KNOWN_CAPABILITIES = {
     "airlift.readdir",
     "airlift.restoredir",
     "airlift.delete",
+    "airlift.writeMany",
     "apps.lookup",
     "afc.list",
     "afc.read",
