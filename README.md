@@ -263,89 +263,10 @@ SwiftUI 视图没法从 zip 里加载。所以 `view` 是一个**注册名**：
 | `airlift.air` | AIR 中转站操作：`list` / `mkdir` / `read` / `write` / `delete` | 廉价 AFC，不经 airlift |
 | `airlift.pull` | 把沙盒外文件读到 AIR（原文件读后立刻写回原位） | 约 20~40 秒 |
 | `airlift.overwrite` | 用 AIR 里的文件（或沙盒内文件）**覆盖**任意沙盒外路径 | 可选覆盖前备份，约 20~60 秒 |
-| `container.status` | MHA（MobileHouseArrest）状态诊断 | 排障第一件事 |
-| `container.find` | 按 bundle id 查数据容器根路径（**只查不激活**） | 需 MHA |
-| `container.activate` | 激活某 App 的数据容器（拿**真实沙盒扩展**） | 需 MHA；lease 是进程级的 |
-| `container.list` | **列容器内目录（任意层级）** | 需 MHA。**airlift 做不到这件事** |
-| `container.ids` | 枚举某类容器已注册的标识符 | 需 MHA；iOS 26 上常近乎为空 |
 | `proc.list` | 列出进程 | — |
 | `proc.signal` | 给进程发信号 | 只认 SIGKILL / SIGSTOP / SIGCONT |
 | `notify.post` | 发本地通知 | 需用户已授权通知 |
 | `exploit.status` | 查漏洞利用可用性 | — |
-
-#### ★ 两条访问沙盒外的路：airlift 与 MHA，能力**不一样**
-
-| | airlift（AirTraffic/ATAirlock） | MHA（MobileHouseArrest 容器） |
-|---|---|---|
-| 能读/写**单个文件** | ✅ 任意路径 | ✅（需先 activate） |
-| **能列目录** | ❌ **不能** | ✅ **能，任意层级** |
-| 需要什么 | LocalDevVPN 回环 + 配对文件 | MHA 身份（`container.status` 可查） |
-| 单次成本 | 10~20 秒 | 瞬时 |
-
-⇒ **要「浏览」就必须走 MHA**；只有 MHA 不可用时才退回 airlift（那就只能按已知路径读写单个文件）。
-`fs.read` / `fs.write` / `fs.delete` / `fs.exists` / **`fs.list`** 会自动识别
-「这个路径在不在已激活的容器 lease 内」—— 在的话直接用 FileManager（含列目录），
-否则才走 airlift。**模块侧不用自己判断。**
-
-> `container.activate` 拿到的 lease 是**进程级**的（持有到进程退出）。
-> 不要对几百个 App 逐个 activate；按需激活。
-
-#### AIR 中转站（`/var/mobile/Media/AIR`）
-
-`/var/mobile/Media` 正是 AFC 的根，所以这个目录**宿主可以廉价直读直写**（一条 AFC 连接，
-不用跑 airlift）。而沙盒外的目标文件只能靠 airlift 搬（一趟 10~20 秒）⇒
-把读出来的字节落在 AIR，之后的查看 / 编辑 / 再覆盖就都是瞬时操作。
-
-**约定**：读 → 副本落 `AIR/<扁平化文件名>`（例：
-`/private/var/mobile/Library/Logs/x.bin` → `private_var_mobile_Library_Logs_x.bin`）；
-写 → 用 `AIR/<文件>` 的字节覆盖目标路径。
-
-> ⚠️ **airlift 的「读」是移动不是拷贝** —— 宿主会在读完后**立刻把原字节写回原位**。
-> 这是内建行为，模块不用自己处理；但如果看到「没能写回原位」的报错，
-> 说明目标文件当前不在原位置，务必按返回里的 `steps` 排查。
-
-#### 「自定义覆盖」的机制差异（参考 lara 的界面形态）
-
-界面形态参考 `github.com/rooootdev/lara` 的 Custom Overwrite（填目标路径 + 选源文件 → 覆盖），
-但**漏洞利用完全不同**：
-
-| | lara | 我们 |
-|---|---|---|
-| 机制 | DarkSword 内核链，内核层**原地覆盖字节** | airlift 越界写 |
-| 大小限制 | **目标文件必须 ≥ 源文件** | **无限制**（目标可比源小/大，甚至不存在） |
-| 是否碰内核 | 是 | 否 |
-
-调用方式：模块加载时宿主会把一张 **C 函数表**（`EscapeHostAPI`）交给模块的
-`escape_module_init(const EscapeHostAPI *api)` 导出（可选导出，返回 0 表示接受）。
-函数表里有 `call(capability, json_args, &out_json)`，JSON 进 JSON 出，二进制数据用 base64。
-**新增能力只需要改宿主**，清单、校验器、已有模块都不用动。
-
-> `requires` 里写了当前宿主不认识的能力 → 校验器给**警告**（不是错误），
-> 因为宿主会自己门禁，而 CI 不该因为宿主将来加了能力就卡住旧清单。
-
-### 2.9 `distribution` — 内置还是独立
-
-```json
-"distribution": "external"
-```
-
-| 值 | 含义 |
-|---|---|
-| `bundled` | **内置**进 app：随宿主包一起发布，首次启动由宿主自动安装，用户卸载后不会再回来（除非手动「恢复内置模块」） |
-| `external`（**默认**） | **独立模块**：走 edge Release 的 `.zip`，用户在「模块 → 导入」里按需安装 |
-
-**默认是 `external`，这是刻意的**：「不内置」是安全的默认值 —— 忘了写这个字段时，
-模块不会被悄悄塞进 app 变成内置模块。
-
-宿主构建时的同步脚本（`Resources/Scripts/sync_bundled_modules.py`）只把
-`distribution == "bundled"` 的模块拷进 `Resources/BundledModules/`，并且会
-**反向清理**：某个模块从 `bundled` 改成 `external` 后，旧的 bundle 副本会被删掉。
-
-> ⚠️ 这个字段是 v0.3.481 加的，起因是一个真实事故：`airlift-poc` 加进本仓库后
-> 被构建脚本按「全部模块」拷进了 bundle，于是它以**内置模块**的身份出现在用户手机上，
-> 而需求明确要求它是独立模块。旧实现还硬编码了 `rm -rf .../com.escapeos.alist`，
-> 意味着每加一个不内置的模块都得回去改一次宿主 workflow —— 典型的「为模块适配构建脚本」。
-> 现在规则由模块自己声明，新增模块**不需要动宿主构建**。
 
 ### 2.10 签名规则（重要）
 
