@@ -263,10 +263,31 @@ SwiftUI 视图没法从 zip 里加载。所以 `view` 是一个**注册名**：
 | `airlift.air` | AIR 中转站操作：`list` / `mkdir` / `read` / `write` / `delete` | 廉价 AFC，不经 airlift |
 | `airlift.pull` | 把沙盒外文件读到 AIR（原文件读后立刻写回原位） | 约 20~40 秒 |
 | `airlift.overwrite` | 用 AIR 里的文件（或沙盒内文件）**覆盖**任意沙盒外路径 | 可选覆盖前备份，约 20~60 秒 |
+| `afc.list` | 列目录（根 = `/var/mobile/Media`） | 廉价 AFC，不经 airlift |
+| `afc.read` | 读文件（同上根） | 二进制请用 base64 |
+| `afc.write` | 写文件（同上根） | — |
+| `afc.delete` | 删文件/目录（`recursive` 控制） | — |
+| `afc.mkdir` | 建目录（同上根） | — |
 | `proc.list` | 列出进程 | — |
 | `proc.signal` | 给进程发信号 | 只认 SIGKILL / SIGSTOP / SIGCONT |
 | `notify.post` | 发本地通知 | 需用户已授权通知 |
 | `exploit.status` | 查漏洞利用可用性 | — |
+
+
+#### ★ `afc.*` 能浏览什么（**如实说明，别误以为能浏览整个 /var**）
+
+`com.apple.afc` 服务把根**钉死**在 `/var/mobile/Media`，所以 `afc.*` 的路径都是
+**相对这个根**的（`"/"` = 根）：
+
+- ✅ **能浏览**：`DCIM` / `Downloads` / `Books` / `PublicStaging` / 各 App 共享出来的文件…
+- ❌ **列不出来**：`/var` 根、`/var/mobile/Library`、其他 App 容器
+
+原因不是实现问题，是**没有通道**：RSD 服务表（64 个服务）里**没有任何服务把根设在 `/var`**；
+`house_arrest` 的 `VendContainer` 在 iOS 27 实测被拒（`VendDocuments` 要求目标 App
+开了文档共享）；而 airlift **本体**只能读写**单个已知文件**、**不能枚举目录**。
+
+> 所以「随便输一个路径就能浏览」在 airlift 这条路上**做不到** ——
+> 需要按已知路径读写单个文件时用 `airlift.pull` / `airlift.overwrite`。
 
 ### 2.10 签名规则（重要）
 
