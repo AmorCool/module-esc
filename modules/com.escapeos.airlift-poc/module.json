@@ -18,7 +18,10 @@
     "fs.read",
     "fs.write",
     "sys.supervised.get",
-    "sys.supervised.set"
+    "sys.supervised.set",
+    "airlift.air",
+    "airlift.pull",
+    "airlift.overwrite"
   ],
   "ui": {
     "style": "native",

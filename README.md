@@ -253,17 +253,45 @@ SwiftUI 视图没法从 zip 里加载。所以 `view` 是一个**注册名**：
 |---|---|---|
 | `host.version` | 宿主版本 / build 号 | — |
 | `host.capabilities` | 列出本机实际支持的能力 | — |
-| `fs.read` | 读文件（沙盒外走漏洞利用） | 单文件 |
+| `fs.read` | 读文件（沙盒外走漏洞利用） | 单文件；沙盒外**默认读后写回原位**（非破坏性），传 `allowMove: true` 才跳过写回 |
 | `fs.write` | 写文件（沙盒外走漏洞利用） | 单文件 |
 | `fs.delete` | 删文件（沙盒外走漏洞利用） | 单文件 |
-| `fs.exists` | 判存在 | 沙盒外靠「能不能读」判断 |
+| `fs.exists` | 判存在 | ⚠️ **仅 App 沙盒内**（沙盒外无法只 stat 不搬动文件） |
 | `fs.list` | 列目录 | ⚠️ **仅 App 沙盒内**；沙盒外无法枚举（漏洞利用只能操作单个文件） |
-| `sys.supervised.get` | 读监督模式状态 | — |
-| `sys.supervised.set` | 开关监督模式（改 `CloudConfigurationDetails.plist` 的 `IsSupervised`） | — |
+| `sys.supervised.get` | 读监督模式状态 | 读走 airlift（读后立刻写回原位） |
+| `sys.supervised.set` | 开关监督模式（改 `CloudConfigurationDetails.plist` 的 `IsSupervised`） | 全程 airlift，约 40~80 秒 |
+| `airlift.air` | AIR 中转站操作：`list` / `mkdir` / `read` / `write` / `delete` | 廉价 AFC，不经 airlift |
+| `airlift.pull` | 把沙盒外文件读到 AIR（原文件读后立刻写回原位） | 约 20~40 秒 |
+| `airlift.overwrite` | 用 AIR 里的文件（或沙盒内文件）**覆盖**任意沙盒外路径 | 可选覆盖前备份，约 20~60 秒 |
 | `proc.list` | 列出进程 | — |
 | `proc.signal` | 给进程发信号 | 只认 SIGKILL / SIGSTOP / SIGCONT |
 | `notify.post` | 发本地通知 | 需用户已授权通知 |
 | `exploit.status` | 查漏洞利用可用性 | — |
+
+#### AIR 中转站（`/var/mobile/Media/AIR`）
+
+`/var/mobile/Media` 正是 AFC 的根，所以这个目录**宿主可以廉价直读直写**（一条 AFC 连接，
+不用跑 airlift）。而沙盒外的目标文件只能靠 airlift 搬（一趟 10~20 秒）⇒
+把读出来的字节落在 AIR，之后的查看 / 编辑 / 再覆盖就都是瞬时操作。
+
+**约定**：读 → 副本落 `AIR/<扁平化文件名>`（例：
+`/private/var/mobile/Library/Logs/x.bin` → `private_var_mobile_Library_Logs_x.bin`）；
+写 → 用 `AIR/<文件>` 的字节覆盖目标路径。
+
+> ⚠️ **airlift 的「读」是移动不是拷贝** —— 宿主会在读完后**立刻把原字节写回原位**。
+> 这是内建行为，模块不用自己处理；但如果看到「没能写回原位」的报错，
+> 说明目标文件当前不在原位置，务必按返回里的 `steps` 排查。
+
+#### 「自定义覆盖」的机制差异（参考 lara 的界面形态）
+
+界面形态参考 `github.com/rooootdev/lara` 的 Custom Overwrite（填目标路径 + 选源文件 → 覆盖），
+但**漏洞利用完全不同**：
+
+| | lara | 我们 |
+|---|---|---|
+| 机制 | DarkSword 内核链，内核层**原地覆盖字节** | airlift 越界写 |
+| 大小限制 | **目标文件必须 ≥ 源文件** | **无限制**（目标可比源小/大，甚至不存在） |
+| 是否碰内核 | 是 | 否 |
 
 调用方式：模块加载时宿主会把一张 **C 函数表**（`EscapeHostAPI`）交给模块的
 `escape_module_init(const EscapeHostAPI *api)` 导出（可选导出，返回 0 表示接受）。
