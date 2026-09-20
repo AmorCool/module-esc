@@ -11,7 +11,7 @@
   "description": "airlift 漏洞利用的调试与功能模块。自带原生 SwiftUI 界面（不依赖 webroot），通过宿主能力接口读写沙盒外文件、开关监督模式。",
   "notes": "需要宿主 v0.3.481+。沙盒外操作依赖 airlift 漏洞利用，仅支持单个文件（不能列目录）。",
   "category": "系统维护",
-  "minHostVersion": "0.3.489",
+  "minHostVersion": "0.3.490",
   "distribution": "external",
   "requires": [
     "host.version",
