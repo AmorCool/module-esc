@@ -90,6 +90,12 @@
         }
       }
     },
+    "distribution": {
+      "type": "string",
+      "description": "分发方式。bundled = 内置进 app（随包发布，首次启动自动安装）；external = 独立模块，走 edge Release 的 .zip 按需导入。默认 external —— 「不内置」是安全的默认值，忘了写字段时模块不会被悄悄塞进 app",
+      "enum": ["bundled", "external"],
+      "default": "external"
+    },
     "requires": {
       "type": "array",
       "description": "声明需要的宿主能力（escape.host.v1）。宿主装载时校验，缺任何一项则模块不可用（卡片显示缺哪一项，不给执行入口）",

@@ -11,9 +11,14 @@
   "notes": "需要 iOS arm64 版二进制（ldid 伪签名后可用）。默认账号 admin，密码见启动日志 run.log。",
   "category": "本地服务",
   "minHostVersion": "0.3.66",
+  "distribution": "external",
   "binary": {
     "executable": "bin/alist",
-    "args": ["server", "--data", "data"],
+    "args": [
+      "server",
+      "--data",
+      "data"
+    ],
     "port": 5244,
     "webPath": "/",
     "autoStart": true
@@ -36,7 +41,10 @@
       "icon": "key.rotation",
       "type": "bridge",
       "symbol": "OpenListAdminSetPwd",
-      "args": ["randomPassword", "dataDir"],
+      "args": [
+        "randomPassword",
+        "dataDir"
+      ],
       "success": "管理员密码已重置: {0}\n旧密码与已登录会话失效, 请用新密码重新登录.",
       "confirm": "重置管理员密码？将生成随机新密码并显示（旧密码失效）."
     }

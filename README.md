@@ -93,6 +93,7 @@ modules/com.example.mymodule/
 | `hotfix` | ⬜ | object | 热补丁模块（声明式 patch + 可选 JS 脚本） |
 | `ui` | ⬜ | object | **原生 SwiftUI 二级界面**（见 §2.7） |
 | `requires` | ⬜ | array | **声明需要的宿主能力**（见 §2.8） |
+| `distribution` | ⬜ | string | `bundled`（内置进 app）/ `external`（独立模块，**默认**）（见 §2.9） |
 
 已知 `accent`：`blue` `green` `orange` `red` `purple` `pink` `teal` `indigo` `yellow` `gray` `mint` `cyan` `brown`
 
@@ -272,7 +273,31 @@ SwiftUI 视图没法从 zip 里加载。所以 `view` 是一个**注册名**：
 > `requires` 里写了当前宿主不认识的能力 → 校验器给**警告**（不是错误），
 > 因为宿主会自己门禁，而 CI 不该因为宿主将来加了能力就卡住旧清单。
 
-### 2.9 签名规则（重要）
+### 2.9 `distribution` — 内置还是独立
+
+```json
+"distribution": "external"
+```
+
+| 值 | 含义 |
+|---|---|
+| `bundled` | **内置**进 app：随宿主包一起发布，首次启动由宿主自动安装，用户卸载后不会再回来（除非手动「恢复内置模块」） |
+| `external`（**默认**） | **独立模块**：走 edge Release 的 `.zip`，用户在「模块 → 导入」里按需安装 |
+
+**默认是 `external`，这是刻意的**：「不内置」是安全的默认值 —— 忘了写这个字段时，
+模块不会被悄悄塞进 app 变成内置模块。
+
+宿主构建时的同步脚本（`Resources/Scripts/sync_bundled_modules.py`）只把
+`distribution == "bundled"` 的模块拷进 `Resources/BundledModules/`，并且会
+**反向清理**：某个模块从 `bundled` 改成 `external` 后，旧的 bundle 副本会被删掉。
+
+> ⚠️ 这个字段是 v0.3.481 加的，起因是一个真实事故：`airlift-poc` 加进本仓库后
+> 被构建脚本按「全部模块」拷进了 bundle，于是它以**内置模块**的身份出现在用户手机上，
+> 而需求明确要求它是独立模块。旧实现还硬编码了 `rm -rf .../com.escapeos.alist`，
+> 意味着每加一个不内置的模块都得回去改一次宿主 workflow —— 典型的「为模块适配构建脚本」。
+> 现在规则由模块自己声明，新增模块**不需要动宿主构建**。
+
+### 2.10 签名规则（重要）
 
 | 模块形态 | 是否需要 `signature.sig` |
 |---|---|

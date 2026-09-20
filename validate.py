@@ -88,6 +88,13 @@ KNOWN_CAPABILITIES = {
 # 原生界面形态（module.json "ui".style）
 UI_STYLES = {"native"}
 
+# 分发方式（module.json "distribution"）
+#   bundled  = 内置进 app（随包发布，首次启动自动安装，用户卸载后不再回来）
+#   external = 独立模块，走 edge Release 的 .zip 按需导入（**默认**）
+# 默认取 external 是刻意的：「不内置」是安全的默认值 —— 忘了写字段时，
+# 模块不会被悄悄塞进 app（v0.3.481 真机踩过：airlift-poc 被自动打成了内置模块）。
+DISTRIBUTIONS = {"bundled", "external"}
+
 
 class Report:
     def __init__(self) -> None:
@@ -438,6 +445,15 @@ def check_manifest(path: str, strict: bool, skip_signature: bool = False) -> int
             f"accent={m['accent']!r} 不在宿主已知色名内，会回退为蓝色"
             f"（已知: {', '.join(sorted(ACCENTS))}）"
         )
+    dist = m.get("distribution")
+    if dist is not None:
+        if not is_nonempty_str(dist):
+            rep.err("distribution 不能为空")
+        elif dist not in DISTRIBUTIONS:
+            rep.err(
+                f"distribution={dist!r} 不支持"
+                f"（仅 {' / '.join(sorted(DISTRIBUTIONS))}）"
+            )
 
     has_binary = "binary" in m
     has_lua = "lua" in m
@@ -493,9 +509,10 @@ def check_manifest(path: str, strict: bool, skip_signature: bool = False) -> int
     req_txt = ""
     if isinstance(m.get("requires"), list) and m["requires"]:
         req_txt = f"，需要能力 {len(m['requires'])} 项"
+    dist_txt = f"，分发 {m.get('distribution') or 'external(默认)'}"
     print(
         f"清单合法: {mid} v{m['version']} "
-        f"({len(m['actions'])} 个动作{kind_txt}{req_txt})"
+        f"({len(m['actions'])} 个动作{kind_txt}{req_txt}{dist_txt})"
     )
     return 0
 
