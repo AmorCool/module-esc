@@ -263,10 +263,32 @@ SwiftUI 视图没法从 zip 里加载。所以 `view` 是一个**注册名**：
 | `airlift.air` | AIR 中转站操作：`list` / `mkdir` / `read` / `write` / `delete` | 廉价 AFC，不经 airlift |
 | `airlift.pull` | 把沙盒外文件读到 AIR（原文件读后立刻写回原位） | 约 20~40 秒 |
 | `airlift.overwrite` | 用 AIR 里的文件（或沙盒内文件）**覆盖**任意沙盒外路径 | 可选覆盖前备份，约 20~60 秒 |
+| `container.status` | MHA（MobileHouseArrest）状态诊断 | 排障第一件事 |
+| `container.find` | 按 bundle id 查数据容器根路径（**只查不激活**） | 需 MHA |
+| `container.activate` | 激活某 App 的数据容器（拿**真实沙盒扩展**） | 需 MHA；lease 是进程级的 |
+| `container.list` | **列容器内目录（任意层级）** | 需 MHA。**airlift 做不到这件事** |
+| `container.ids` | 枚举某类容器已注册的标识符 | 需 MHA；iOS 26 上常近乎为空 |
 | `proc.list` | 列出进程 | — |
 | `proc.signal` | 给进程发信号 | 只认 SIGKILL / SIGSTOP / SIGCONT |
 | `notify.post` | 发本地通知 | 需用户已授权通知 |
 | `exploit.status` | 查漏洞利用可用性 | — |
+
+#### ★ 两条访问沙盒外的路：airlift 与 MHA，能力**不一样**
+
+| | airlift（AirTraffic/ATAirlock） | MHA（MobileHouseArrest 容器） |
+|---|---|---|
+| 能读/写**单个文件** | ✅ 任意路径 | ✅（需先 activate） |
+| **能列目录** | ❌ **不能** | ✅ **能，任意层级** |
+| 需要什么 | LocalDevVPN 回环 + 配对文件 | MHA 身份（`container.status` 可查） |
+| 单次成本 | 10~20 秒 | 瞬时 |
+
+⇒ **要「浏览」就必须走 MHA**；只有 MHA 不可用时才退回 airlift（那就只能按已知路径读写单个文件）。
+`fs.read` / `fs.write` / `fs.delete` / `fs.exists` / **`fs.list`** 会自动识别
+「这个路径在不在已激活的容器 lease 内」—— 在的话直接用 FileManager（含列目录），
+否则才走 airlift。**模块侧不用自己判断。**
+
+> `container.activate` 拿到的 lease 是**进程级**的（持有到进程退出）。
+> 不要对几百个 App 逐个 activate；按需激活。
 
 #### AIR 中转站（`/var/mobile/Media/AIR`）
 
