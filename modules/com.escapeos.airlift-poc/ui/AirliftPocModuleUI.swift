@@ -80,13 +80,13 @@ private struct BottomActionBar<Content: View>: View {
 
 /// 把能力返回的「步骤」原文清成**给人看的短句**.
 ///
-/// 能力返回的步骤里带大量给开发者的解释：`⚠️`、`★`、markdown 的 `**` 与反引号、
+/// 能力返回的步骤里带大量给开发者的解释：`⚠️`、`▸`、markdown 的 `**` 与反引号、
 /// 以及括号里那串「为什么 / 判据 / 边界」. 那些在**日志**里有用，在**界面**上是噪音.
 /// 这里只留「做了什么、成没成」；原文照样能在展开后的「全部行」和日志里看到.
 private enum StepText {
     static func clean(_ raw: String) -> String {
         var text = raw
-        for junk in ["⚠️", "\u{FE0F}", "★", "**", "`", "❌", "✅"] {
+        for junk in ["⚠️", "\u{FE0F}", "▸", "**", "`", "❌", "✅"] {
             text = text.replacingOccurrences(of: junk, with: "")
         }
         for pair in [("（", "）"), ("(", ")")] {
@@ -265,7 +265,7 @@ func registerAirliftPocModuleUI() {
             ModuleUITab(id: "theme", title: "主题", systemImage: "keyboard") { m in
                 AirliftThemeTab(module: m)
             },
-            // ★ v0.3.512：监督 / 日志 收进「更多」——
+            // ▸ v0.3.512：监督 / 日志 收进「更多」——
             //   iOS 的 TabView 超过 5 个 tab 会**自动**加一个系统「更多」溢出项，
             //   那个页面长得跟主程序完全不一样（用户反馈过）. 自己做一个 5 个 tab
             //   的布局就没有溢出项了，而且「更多」页能照主程序 MoreView 的样子做.
@@ -406,7 +406,7 @@ private struct AirliftFilesTab: View {
     @State private var newFolderName = ""
     @State private var statPath = ""
     @State private var statResult = ""
-    /// ★ v0.3.512：批量选择模式（用户要求「不能批量选择/全选删除操作吗」）
+    /// ▸ v0.3.512：批量选择模式（用户要求「不能批量选择/全选删除操作吗」）
     @State private var selecting = false
     @State private var picked = Set<String>()      // entry.path
     @State private var confirmingBatchDelete = false

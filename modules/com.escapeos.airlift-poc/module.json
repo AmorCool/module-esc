@@ -5,7 +5,7 @@
   "name": "Airlift PoC",
   "icon": "bolt.horizontal.circle.fill",
   "accent": "purple",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "versionCode": 1,
   "author": "EscapeOS Official",
   "description": "airlift 漏洞利用的调试与功能模块。自带原生 SwiftUI 界面（不依赖 webroot），通过宿主能力接口读写沙盒外文件、开关监督模式。",

@@ -30,7 +30,7 @@
 - 主操作固定底部：`.safeAreaInset(edge: .bottom)` + `.regularMaterial`
 - 外壳 `ModuleHostShell` 已提供顶栏标题与底部 tab 栏 ⇒ **不套 NavigationStack、不设 navigationTitle**
 
-> ★ 走过一次弯路：我曾自造过一套 cyan 卡片系统（`AirliftUI.swift`），被用户驳回
+> 走过一次弯路：我曾自造过一套 cyan 卡片系统（`AirliftUI.swift`），被用户驳回
 > 「UI 界面不像主程序的，没有主程序那样好看的 UI」. 已删除，**不要重犯**.
 
 三条硬规则（用户明确要求）：
