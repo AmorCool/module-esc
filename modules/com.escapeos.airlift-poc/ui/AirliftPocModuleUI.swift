@@ -243,6 +243,13 @@ private func byteText(_ size: Int) -> String {
     return "\(size) B"
 }
 
+/// ISO8601 时间戳 → `09-24 09:41`（去掉年份、秒、毫秒 —— 列表里没人看那些）.
+private func shortTime(_ raw: String) -> String {
+    guard raw.count >= 16 else { return raw }
+    let s = raw.dropFirst(5)                    // "2026-09-24T09:41:53Z" → "09-24T09:41:53Z"
+    return s.prefix(12).replacingOccurrences(of: "T", with: " ")   // → "09-24 09:41"
+}
+
 // MARK: - 注册入口
 
 /// 把 airlift-poc 的原生界面注册进宿主.
@@ -1549,6 +1556,13 @@ private struct AirliftSupervisedTab: View {
 ///
 /// 用户要求：「备份应该记录第一次的备份，而不是每次写入都备份一次；
 /// 序号 1 即初始备份，方便以后还原」.
+///
+/// ## 为什么不「自动挑一份好的」（用户否决）
+/// 用户指出：1 号只保证**最早**，**不保证完好** —— 若我们第一次读就已经读到坏内容，
+/// 1 号本身就是坏的. 我原本打算按「最大/最全」自动挑一份，**被用户否决，且确实是错的**：
+/// 文件变小不等于坏（正常删键也会变小），拿大小当判据会误判.
+/// ⇒ 现在**只摆数据**：每份列出**键数 / 字节 / 时间**，再并排显示「设备上当前」的键数，
+/// 哪一份是好的由用户一眼判断，我们不替他做决定.
 private struct AirliftBackupsTab: View {
     @State private var groups: [Group] = []
     @State private var loading = false
@@ -1560,13 +1574,26 @@ private struct AirliftBackupsTab: View {
         var id: String { path }
         let path: String
         let versions: [Ver]
+        /// 设备上**当前**内容的字节数（来自本地缓存，可能不是最新）
+        let currentBytes: Int?
+        /// 设备上**当前**内容的顶层键数（同上）
+        let currentKeys: Int?
     }
     struct Ver: Identifiable {
         var id: Int { index }
         let index: Int
         let time: String
         let bytes: Int
+        /// 顶层键数；不是字典 plist ⇒ nil
+        let keys: Int?
         let note: String
+    }
+
+    /// 一份备份的副标题：`09-24 09:41 · 5764 B · 49 键`
+    private func subtitle(_ v: Ver) -> String {
+        var parts = [shortTime(v.time), byteText(v.bytes)]
+        if let k = v.keys { parts.append("\(k) 键") }
+        return parts.joined(separator: "  ·  ")
     }
 
     var body: some View {
@@ -1580,8 +1607,8 @@ private struct AirliftBackupsTab: View {
                 .disabled(loading || working)
             } footer: {
                 if note.isEmpty {
-                    Text("每次覆盖前都会存一份快照. **1 号是初始备份**（我们第一次介入之前的原文件），永不覆盖；"
-                         + "还原默认回 1 号.")
+                    Text("每次覆盖前都会存一份快照. **1 号是最早的一份**，永不覆盖. "
+                         + "每份都标了键数/字节 —— 哪份是完好的由你看数据判断，我们不替你挑.")
                 } else {
                     Text(note).foregroundColor(AppTheme.accent)
                 }
@@ -1596,18 +1623,31 @@ private struct AirliftBackupsTab: View {
 
             ForEach(groups) { group in
                 Section {
+                    if let cb = group.currentBytes {
+                        HStack(spacing: 8) {
+                            Text("设备上当前")
+                                .font(.caption).foregroundColor(.secondary)
+                            Spacer()
+                            Text(group.currentKeys.map { "\(byteText(cb))  ·  \($0) 键" }
+                                 ?? byteText(cb))
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                    }
                     ForEach(group.versions) { v in
                         Button {
                             confirmRestore = (group.path, v.index)
                         } label: {
                             HStack(spacing: 10) {
-                                SizePill(text: v.index == 1 ? "1 初始" : "\(v.index)",
-                                         tint: v.index == 1 ? .green : .secondary)
+                                SizePill(text: v.index == 1 ? "1 最早" : "\(v.index)",
+                                         tint: v.index == 1 ? .blue : .secondary)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(v.index == 1 ? "初始备份（推荐还原目标）" : "第 \(v.index) 份快照")
+                                    Text(v.index == 1 ? "最早的一份（我们介入之前）"
+                                                      : "第 \(v.index) 份快照")
                                         .font(.callout).foregroundColor(.primary)
-                                    Text("\(v.time)  ·  \(byteText(v.bytes))")
-                                        .font(.caption2).foregroundColor(.secondary)
+                                    Text(subtitle(v))
+                                        .font(.system(.caption2, design: .monospaced))
+                                        .foregroundColor(.secondary)
                                 }
                                 Spacer()
                                 Image(systemName: "arrow.counterclockwise")
@@ -1626,19 +1666,35 @@ private struct AirliftBackupsTab: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .busyOverlay(loading || working, title: working ? "还原中…" : "读取中…")
-        .confirmationDialog("还原到第 \(confirmRestore?.version ?? 1) 份备份？",
-                            isPresented: Binding(get: { confirmRestore != nil },
-                                                 set: { if !$0 { confirmRestore = nil } }),
+        .confirmationDialog(restoreTitle, isPresented: Binding(get: { confirmRestore != nil },
+                                                              set: { if !$0 { confirmRestore = nil } }),
                             titleVisibility: .visible) {
             Button("还原", role: .destructive) {
                 if let target = confirmRestore { Task { await restore(target) } }
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("会把 \(confirmRestore?.path ?? "") 覆盖成那份备份的内容. "
-                 + "还原前会先给当前内容也存一份快照（免得还原错了没法回头）.")
+            Text(restoreMessage)
         }
         .task { await reload() }
+    }
+
+    /// 被选中要还原的那一份（弹窗里要显示它的键数/字节，别让用户盲选）
+    private var pending: Ver? {
+        guard let c = confirmRestore else { return nil }
+        return groups.first { $0.path == c.path }?.versions.first { $0.index == c.version }
+    }
+
+    private var restoreTitle: String {
+        guard let v = pending else { return "选择要还原的备份" }
+        return "还原到第 \(v.index) 份？"
+    }
+
+    private var restoreMessage: String {
+        guard let v = pending, let c = confirmRestore else { return "" }
+        var msg = "把 \(c.path) 覆盖成这一份：\(subtitle(v)). "
+        msg += "还原前会先给当前内容也存一份快照（免得还原错了没法回头）."
+        return msg
     }
 
     private func reload() async {
@@ -1657,9 +1713,14 @@ private struct AirliftBackupsTab: View {
                 return Ver(index: idx,
                            time: (v["time"] as? String) ?? "",
                            bytes: (v["bytes"] as? Int) ?? 0,
+                           keys: v["keys"] as? Int,
                            note: (v["note"] as? String) ?? "")
             }
-            if !versions.isEmpty { out.append(Group(path: path, versions: versions)) }
+            if !versions.isEmpty {
+                out.append(Group(path: path, versions: versions,
+                                 currentBytes: d2?["currentBytes"] as? Int,
+                                 currentKeys: d2?["currentKeys"] as? Int))
+            }
         }
         groups = out
     }
@@ -1886,9 +1947,14 @@ private struct AirliftChangesTab: View {
         { action in
             switch action {
             case "write": return ("写入", .green)
-            case "write-failed": return ("写入失败", .orange)
+            case "write-failed": return ("写入失败", .red)
             case "delete": return ("删除", .red)
-            case "delete-failed": return ("删除失败", .orange)
+            case "delete-failed": return ("删除失败", .red)
+            case "plist-set": return ("改值", .green)
+            case "plist-unset": return ("还原默认", .blue)
+            case "restore": return ("回滚", .blue)
+            case "restore-failed": return ("回滚失败", .red)
+            case "kill-cfprefsd": return ("重启偏好服务", .secondary)
             default: return (action, .secondary)
             }
         }
@@ -1931,7 +1997,7 @@ private struct AirliftChangesTab: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 8) {
                             SizePill(text: info.0, tint: info.1)
-                            Text(row.time)
+                            Text(shortTime(row.time))
                                 .font(.caption2).foregroundColor(.secondary)
                             Spacer()
                             if row.bytes > 0 {
