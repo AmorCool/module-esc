@@ -1219,7 +1219,19 @@ private struct AirliftMoreTab: View {
                     AirliftChangesTab()
                 } label: {
                     MoreCard(icon: "clock.arrow.circlepath", title: "改动记录",
-                             subtitle: "airlift 改过哪些文件 / 加了什么，都在这")
+                             subtitle: "airlift 改过哪些文件、改成了什么值")
+                }
+                NavigationLink {
+                    AirliftBackupsTab()
+                } label: {
+                    MoreCard(icon: "arrow.counterclockwise.circle", title: "备份与还原",
+                             subtitle: "1 号 = 初始备份（永不覆盖），可回滚任意一步")
+                }
+                NavigationLink {
+                    AirliftTweaksTab()
+                } label: {
+                    MoreCard(icon: "slider.horizontal.3", title: "系统选项",
+                             subtitle: "移植自 Nugget：SpringBoard / AirDrop / 标签栏")
                 }
                 NavigationLink {
                     AirliftLogTab()
@@ -1531,6 +1543,300 @@ private struct AirliftSupervisedTab: View {
     }
 }
 
+// MARK: - 备份与还原
+
+/// 「备份与还原」：1 号是**初始备份**（永不覆盖），可回滚任意一步.
+///
+/// 用户要求：「备份应该记录第一次的备份，而不是每次写入都备份一次；
+/// 序号 1 即初始备份，方便以后还原」.
+private struct AirliftBackupsTab: View {
+    @State private var groups: [Group] = []
+    @State private var loading = false
+    @State private var working = false
+    @State private var note = ""
+    @State private var confirmRestore: (path: String, version: Int)?
+
+    struct Group: Identifiable {
+        var id: String { path }
+        let path: String
+        let versions: [Ver]
+    }
+    struct Ver: Identifiable {
+        var id: Int { index }
+        let index: Int
+        let time: String
+        let bytes: Int
+        let note: String
+    }
+
+    var body: some View {
+        List {
+            Section {
+                Button {
+                    Task { await reload() }
+                } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
+                .disabled(loading || working)
+            } footer: {
+                if note.isEmpty {
+                    Text("每次覆盖前都会存一份快照. **1 号是初始备份**（我们第一次介入之前的原文件），永不覆盖；"
+                         + "还原默认回 1 号.")
+                } else {
+                    Text(note).foregroundColor(AppTheme.accent)
+                }
+            }
+
+            if groups.isEmpty {
+                Section {
+                    Text(loading ? "读取中…" : "还没有备份. 用「写入」覆盖一次就会出现.")
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            ForEach(groups) { group in
+                Section {
+                    ForEach(group.versions) { v in
+                        Button {
+                            confirmRestore = (group.path, v.index)
+                        } label: {
+                            HStack(spacing: 10) {
+                                SizePill(text: v.index == 1 ? "1 初始" : "\(v.index)",
+                                         tint: v.index == 1 ? .green : .secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(v.index == 1 ? "初始备份（推荐还原目标）" : "第 \(v.index) 份快照")
+                                        .font(.callout).foregroundColor(.primary)
+                                    Text("\(v.time)  ·  \(byteText(v.bytes))")
+                                        .font(.caption2).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.counterclockwise")
+                                    .font(.caption).foregroundColor(AppTheme.accent)
+                            }
+                        }
+                        .disabled(working)
+                    }
+                } header: {
+                    Text(group.path)
+                        .font(.system(.caption2, design: .monospaced))
+                        .textCase(nil)
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .busyOverlay(loading || working, title: working ? "还原中…" : "读取中…")
+        .confirmationDialog("还原到第 \(confirmRestore?.version ?? 1) 份备份？",
+                            isPresented: Binding(get: { confirmRestore != nil },
+                                                 set: { if !$0 { confirmRestore = nil } }),
+                            titleVisibility: .visible) {
+            Button("还原", role: .destructive) {
+                if let target = confirmRestore { Task { await restore(target) } }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("会把 \(confirmRestore?.path ?? "") 覆盖成那份备份的内容. "
+                 + "还原前会先给当前内容也存一份快照（免得还原错了没法回头）.")
+        }
+        .task { await reload() }
+    }
+
+    private func reload() async {
+        loading = true
+        defer { loading = false }
+        let dict = AirliftJSON.dict(await airliftCall("airlift.backups", "{}"))
+        let raw = (dict?["paths"] as? [[String: Any]]) ?? []
+        var out: [Group] = []
+        for item in raw {
+            guard let path = item["path"] as? String else { continue }
+            let d2 = AirliftJSON.dict(await airliftCall("airlift.backups",
+                                                        AirliftJSON.json(["path": path])))
+            let vraw = (d2?["versions"] as? [[String: Any]]) ?? []
+            let versions = vraw.compactMap { v -> Ver? in
+                guard let idx = v["index"] as? Int else { return nil }
+                return Ver(index: idx,
+                           time: (v["time"] as? String) ?? "",
+                           bytes: (v["bytes"] as? Int) ?? 0,
+                           note: (v["note"] as? String) ?? "")
+            }
+            if !versions.isEmpty { out.append(Group(path: path, versions: versions)) }
+        }
+        groups = out
+    }
+
+    private func restore(_ target: (path: String, version: Int)) async {
+        working = true
+        defer { working = false }
+        let dict = AirliftJSON.dict(await airliftCall("airlift.restore",
+                                                      AirliftJSON.json(["path": target.path,
+                                                                        "version": target.version])))
+        note = AirliftJSON.bool(dict, "ok") == true
+            ? "已还原 \(target.path) 到第 \(target.version) 份"
+            : "还原失败：" + (AirliftJSON.string(dict, "error") ?? "见日志")
+        confirmRestore = nil
+        await reload()
+    }
+}
+
+// MARK: - 系统选项（移植自 Nugget）
+
+/// 「系统选项」：移植 Nugget 的 plist tweak.
+///
+/// ## 为什么能移植（研究结论）
+/// Nugget 自己的机制是 SparseRestore（部分恢复），**在 iOS 27 上已被 Apple 补掉**
+/// （它 README 原文：DO NOT USE THIS ON iOS 27）. 但它的功能**本质就是往 plist 写键**，
+/// 而那几个 plist 在我们的**可写区** ⇒ 用 airlift 直接写就行.
+///
+/// ## 「默认」= 删键
+/// Nugget 的 UI 每个设置三个单选 `Default / Enabled / Disabled`，
+/// `Default` 的动作是 `set_enabled(False)` = **不碰这个键** ⇒
+/// 我们关掉开关时**删掉这个键**，就等价于「回到系统默认」.
+private struct AirliftTweaksTab: View {
+    /// 一条 tweak（键名与值照 Nugget 的 `tweak_loader.py:217-287` 抄）
+    struct Tweak: Identifiable {
+        var id: String { file + "/" + key }
+        let file: String
+        let key: String
+        let label: String
+        let hint: String
+        /// 开 = 写入这个值；关 = 删键
+        let onValue: Any
+        let section: String
+    }
+
+    private static let springboard = "/var/mobile/Library/Preferences/com.apple.springboard.plist"
+    private static let sharingd = "/var/mobile/Library/Preferences/com.apple.sharingd.plist"
+    private static let uikit = "/var/mobile/Library/Preferences/com.apple.UIKit.plist"
+
+    private static let tweaks: [Tweak] = [
+        Tweak(file: springboard, key: "SBDontLockAfterCrash", label: "崩溃后不锁屏",
+              hint: "SBDontLockAfterCrash", onValue: true, section: "SpringBoard"),
+        Tweak(file: springboard, key: "SBDontDimOrLockOnAC", label: "接电源时不自动变暗/锁屏",
+              hint: "SBDontDimOrLockOnAC", onValue: true, section: "SpringBoard"),
+        Tweak(file: springboard, key: "SBHideLowPowerAlerts", label: "隐藏低电量提示",
+              hint: "SBHideLowPowerAlerts", onValue: true, section: "SpringBoard"),
+        Tweak(file: springboard, key: "SBHideACPower", label: "隐藏充电提示",
+              hint: "SBHideACPower", onValue: true, section: "SpringBoard"),
+        Tweak(file: springboard, key: "SBNeverBreadcrumb", label: "永不显示返回上级面包屑",
+              hint: "SBNeverBreadcrumb", onValue: true, section: "SpringBoard"),
+        Tweak(file: springboard, key: "SBShowSupervisionTextOnLockScreen",
+              label: "锁屏显示监督文字", hint: "SBShowSupervisionTextOnLockScreen",
+              onValue: true, section: "SpringBoard"),
+        Tweak(file: springboard, key: "SBExtendedDisplayOverrideSupportForAirPlayAndDontFileRadars",
+              label: "Stage Manager 支持 AirPlay", hint: "AirplaySupport",
+              onValue: true, section: "SpringBoard"),
+        Tweak(file: springboard, key: "SBAlwaysShowSystemApertureInSnapshots",
+              label: "截图中显示灵动岛", hint: "SBAlwaysShowSystemApertureInSnapshots",
+              onValue: true, section: "SpringBoard"),
+        Tweak(file: springboard, key: "SBSuppressDynamicIslandCompletely",
+              label: "完全隐藏灵动岛", hint: "SBSuppressDynamicIslandCompletely",
+              onValue: true, section: "SpringBoard"),
+        Tweak(file: springboard, key: "SBShowAuthenticationEngineeringUI",
+              label: "显示认证工程 UI", hint: "SBShowAuthenticationEngineeringUI",
+              onValue: true, section: "SpringBoard"),
+        Tweak(file: sharingd, key: "OverrideTimeLimitEveryoneMode", label: "AirDrop 取消 10 分钟限制",
+              hint: "OverrideTimeLimitEveryoneMode", onValue: true, section: "AirDrop"),
+        Tweak(file: uikit, key: "UseFloatingTabBar", label: "浮动标签栏",
+              hint: "UseFloatingTabBar", onValue: false, section: "UIKit"),
+    ]
+
+    @State private var keysByFile: [String: [String: String]] = [:]
+    @State private var loading = false
+    @State private var working = false
+    @State private var note = ""
+
+    private var sections: [String] {
+        var seen: [String] = []
+        for t in Self.tweaks where !seen.contains(t.section) { seen.append(t.section) }
+        return seen
+    }
+
+    var body: some View {
+        List {
+            Section {
+                Button {
+                    Task { await reload() }
+                } label: {
+                    Label("重新读取当前值", systemImage: "arrow.clockwise")
+                }
+                .disabled(loading || working)
+            } footer: {
+                Text(note.isEmpty
+                     ? "键名与值照 Nugget 抄. **关掉开关 = 删掉这个键 = 回到系统默认**（Nugget 的「Default」语义）. "
+                       + "改完**多数要 respring / 重启**才看得到效果."
+                     : note)
+                    .foregroundColor(note.isEmpty ? .secondary : AppTheme.accent)
+            }
+
+            ForEach(sections, id: \.self) { section in
+                Section {
+                    ForEach(Self.tweaks.filter { $0.section == section }) { tweak in
+                        Toggle(isOn: Binding(
+                            get: { isOn(tweak) },
+                            set: { newValue in Task { await apply(tweak, on: newValue) } }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(tweak.label).font(.callout)
+                                Text(tweak.key)
+                                    .font(.system(.caption2, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .disabled(working)
+                    }
+                } header: {
+                    Text(section)
+                        .font(.footnote.weight(.semibold)).textCase(nil).foregroundColor(.secondary)
+                } footer: {
+                    if section == "SpringBoard" {
+                        Text(Self.springboard).font(.system(.caption2, design: .monospaced))
+                    } else if section == "AirDrop" {
+                        Text(Self.sharingd).font(.system(.caption2, design: .monospaced))
+                    } else {
+                        Text(Self.uikit).font(.system(.caption2, design: .monospaced))
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .busyOverlay(loading || working, title: working ? "写入中…" : "读取中…")
+        .task { await reload() }
+    }
+
+    private func isOn(_ tweak: Tweak) -> Bool {
+        guard let value = keysByFile[tweak.file]?[tweak.key] else { return false }
+        if let b = tweak.onValue as? Bool { return value == (b ? "true" : "false") }
+        if let i = tweak.onValue as? Int { return value == "\(i)" }
+        return value == "\(tweak.onValue)"
+    }
+
+    private func reload() async {
+        loading = true
+        defer { loading = false }
+        var out: [String: [String: String]] = [:]
+        for file in Set(Self.tweaks.map(\.file)) {
+            let dict = AirliftJSON.dict(await airliftCall("plist.tweak",
+                                                          AirliftJSON.json(["path": file, "list": true])))
+            out[file] = (dict?["keys"] as? [String: String]) ?? [:]
+        }
+        keysByFile = out
+    }
+
+    private func apply(_ tweak: Tweak, on: Bool) async {
+        working = true
+        defer { working = false }
+        var payload: [String: Any] = ["path": tweak.file, "key": tweak.key]
+        if on { payload["value"] = tweak.onValue }      // 不传 value = 删键
+        let dict = AirliftJSON.dict(await airliftCall("plist.tweak", AirliftJSON.json(payload)))
+        note = AirliftJSON.bool(dict, "ok") == true
+            ? (on ? "已写入 \(tweak.key) = \(tweak.onValue)" : "已删键 \(tweak.key)（回到系统默认）")
+              + " · 多数要 respring / 重启才生效"
+            : "失败：" + (AirliftJSON.string(dict, "error") ?? "见日志")
+        await reload()
+    }
+}
+
 // MARK: - 改动记录
 
 /// 「改动记录」：airlift 越界改过哪些文件.
@@ -1553,6 +1859,7 @@ private struct AirliftChangesTab: View {
         let bytes: Int
         let backup: String
         let verified: Bool
+        let detail: String
     }
 
     private var actionLabel: (String) -> (String, Color) {
@@ -1620,6 +1927,14 @@ private struct AirliftChangesTab: View {
                             .font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
+                        if !row.detail.isEmpty {
+                            // 用户要求：「动作是改了什么值 应该显示在改动记录里」
+                            Text(row.detail)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundColor(AppTheme.accent)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                        }
                         if !row.backup.isEmpty {
                             Text("备份：\(row.backup)")
                                 .font(.caption2).foregroundColor(.secondary)
@@ -1659,7 +1974,8 @@ private struct AirliftChangesTab: View {
                        path: path,
                        bytes: (item["bytes"] as? Int) ?? 0,
                        backup: (item["backup"] as? String) ?? "",
-                       verified: (item["verified"] as? Bool) ?? false)
+                       verified: (item["verified"] as? Bool) ?? false,
+                       detail: (item["detail"] as? String) ?? "")
         }
     }
 
