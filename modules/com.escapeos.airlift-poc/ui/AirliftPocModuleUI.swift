@@ -1368,10 +1368,8 @@ private struct AirliftAboutTab: View {
             }
 
             Section {
-                Text("· 沙盒外只能读写**单个已知文件**，**不能列目录**" + "
-"
-                     + "· 在 Media 之外**建不了目录**（沙盒允许建文件、不允许建目录）" + "
-"
+                Text("· 沙盒外只能读写**单个已知文件**，**不能列目录**" + "\n"
+                     + "· 在 Media 之外**建不了目录**（沙盒允许建文件、不允许建目录）" + "\n"
                      + "· 把 Media 之外的**目录**搬进来是单向的（搬不回去）—— 已禁用该能力")
                     .font(.caption).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
