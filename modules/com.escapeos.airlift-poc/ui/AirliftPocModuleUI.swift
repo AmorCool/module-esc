@@ -2004,7 +2004,7 @@ private struct AirliftTweaksTab: View {
     /// 正在读第几个文件 / 共几个（读取每个 10~20 秒，必须让用户看见进度）
     @State private var readProgress = (done: 0, total: 0)
 
-    private enum Phase {
+    private enum Phase: Equatable {
         case idle, reading, writing
         var title: String {
             switch self {
