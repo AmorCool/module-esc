@@ -1755,14 +1755,16 @@ private struct AirliftTweaksTab: View {
         List {
             Section {
                 Button {
-                    Task { await reload() }
+                    Task { await forceRefresh() }
                 } label: {
-                    Label("重新读取当前值", systemImage: "arrow.clockwise")
+                    Label("从设备重读（慢，每个文件约 10~20 秒）", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .disabled(loading || working)
             } footer: {
                 Text(note.isEmpty
-                     ? "键名与值照 Nugget 抄. **关掉开关 = 删掉这个键 = 回到系统默认**（Nugget 的「Default」语义）. "
+                     ? "键名与值照 Nugget 抄. **关掉开关 = 删掉这个键 = 回到系统默认**（Nugget 的「Default」语义）.\n"
+                       + "读取走**本地缓存**：首次进本页要读一遍（约 10~20 秒/文件），之后**秒开**；"
+                       + "改一次值 = 写一次 airlift（约 10~20 秒）.\n"
                        + "改完**多数要 respring / 重启**才看得到效果."
                      : note)
                     .foregroundColor(note.isEmpty ? .secondary : AppTheme.accent)
@@ -1811,6 +1813,7 @@ private struct AirliftTweaksTab: View {
         return value == "\(tweak.onValue)"
     }
 
+    /// 读当前值. **走缓存** ⇒ 第二次进本页是秒开的.
     private func reload() async {
         loading = true
         defer { loading = false }
@@ -1821,6 +1824,23 @@ private struct AirliftTweaksTab: View {
             out[file] = (dict?["keys"] as? [String: String]) ?? [:]
         }
         keysByFile = out
+    }
+
+    /// 强制从设备重读（慢）—— 只有用户主动点才走这条.
+    private func forceRefresh() async {
+        working = true
+        defer { working = false }
+        var failed: [String] = []
+        for file in Set(Self.tweaks.map(\.file)) {
+            let dict = AirliftJSON.dict(await airliftCall("plist.tweak",
+                                                          AirliftJSON.json(["path": file,
+                                                                            "refresh": true])))
+            if AirliftJSON.bool(dict, "ok") != true { failed.append(file) }
+        }
+        note = failed.isEmpty
+            ? "已从设备重读全部文件"
+            : "有 \(failed.count) 个文件没读成功（可稍后再试）"
+        await reload()
     }
 
     private func apply(_ tweak: Tweak, on: Bool) async {
