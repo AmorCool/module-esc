@@ -100,22 +100,32 @@ private enum StepText {
     }
 }
 
-/// 步骤区块：默认只显示关键行，技术判据折起来. 用普通 `Section`（不自造卡片）.
+/// 步骤区块：默认**只留 2~4 行真正有信息的**，其余折起来. 用普通 `Section`（不自造卡片）.
+///
+/// ## 为什么从「黑名单」改成「白名单」（用户反馈「注释太多了 精简掉 废话那么多」）
+/// 旧实现是「排除一批噪音关键词」—— 那是**漏的**：`清单里有没有我们那条`、
+/// `0) 变体 4：`、`读到 AssetManifest`、`关键结论：组(d)` 这些都不在黑名单里，
+/// 于是一次写入能刷出十几行给开发者看的判据原文.
+/// ⇒ 反过来做：**只保留少量「做了什么 / 成没成」的句子**，其余全部收进「显示全部」.
+/// 判据原文一行都没丢，只是**默认不糊在你脸上**（展开或看日志都在）.
 private struct StepsSection: View {
     let steps: [String]
     var title: String = "执行步骤"
     @State private var expanded = false
 
-    private static let noise: [String] = [
-        "判据①", "判据②", "判据③", "books staging", "Grappa 实验",
-        "Media 根前若干项", "规范化 base", "linkIdentifier", "targetIdentifier",
-        "清单第", "帧前32字节", "响应 #", "已发 ", "攻击标识符",
-        "AssetID =", "linkDestination =", "读目标（", "搬回的条目（",
-        "【Grappa", "结论 下一步", "结论 本次",
+    /// 白名单：命中这些片段的行才默认显示.
+    private static let keep: [String] = [
+        "stage 已发出",              // 第①步：归档发出去了
+        "清单里有没有我们那条",       // 第②步：设备认了我们那条 asset
+        "已被搬走",                  // 第③步：设备真的执行了 move
+        "机制成立",                  // 结论：整条链通了
+        "已发出覆盖写入",            // 结论：写入已发出
+        "未成立", "失败", "拒绝",     // 失败原因（必须让用户看见）
+        "已删除", "读回",
     ]
 
     private var keySteps: [String] {
-        steps.filter { line in !Self.noise.contains { line.contains($0) } }
+        steps.filter { line in Self.keep.contains { line.contains($0) } }
     }
 
     var body: some View {
@@ -124,7 +134,7 @@ private struct StepsSection: View {
                 ForEach(Array((expanded ? steps : keySteps).enumerated()), id: \.offset) { _, step in
                     HStack(alignment: .top, spacing: 8) {
                         Circle()
-                            .fill(isBad(step) ? Color.orange
+                            .fill(isBad(step) ? Color.red
                                   : (isGood(step) ? Color.green : Color.secondary.opacity(0.4)))
                             .frame(width: 6, height: 6)
                             .padding(.top, 6)
@@ -137,7 +147,7 @@ private struct StepsSection: View {
                     Button {
                         withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
                     } label: {
-                        Label(expanded ? "收起技术细节" : "显示全部 \(steps.count) 行",
+                        Label(expanded ? "收起" : "技术细节 \(steps.count) 行",
                               systemImage: expanded ? "chevron.up" : "chevron.down")
                             .font(.caption)
                     }
@@ -234,6 +244,20 @@ private func airliftCall(_ capability: String, _ args: String) async -> String {
             continuation.resume(returning: json)
         }
     }
+}
+
+/// 判断一次能力调用是否成功.
+///
+/// ## 为什么不只看 `ok`
+/// 宿主有一条**成功路径漏了 `ok` 字段**（`airOverwrite`，0.3.524 及以前）——
+/// 于是模块把一次**成功的写入显示成失败**，还把整段原始 JSON 糊在错误框里.
+/// 用户看到的「注释太多了 废话那么多」有一半就是那段 JSON.
+/// 宿主侧已修（成功/失败都显式给 `ok`），这里再兜一层：**`ok` 缺失时看 `error`**，
+/// 没有 `error` 就当成功 —— 免得将来再有一条路径漏字段，又把成功报成失败.
+private func airliftOK(_ dict: [String: Any]?) -> Bool {
+    guard let dict else { return false }
+    if let ok = dict["ok"] as? Bool { return ok }
+    return dict["error"] == nil
 }
 
 /// 字节数格式化（等宽数字，避免行宽跳动）.
@@ -411,8 +435,6 @@ private struct AirliftFilesTab: View {
     @State private var deleteEntry: AfcEntry?
     @State private var confirmingDelete = false
     @State private var newFolderName = ""
-    @State private var statPath = ""
-    @State private var statResult = ""
     /// ▸ v0.3.512：批量选择模式（用户要求「不能批量选择/全选删除操作吗」）
     @State private var selecting = false
     @State private var picked = Set<String>()      // entry.path
@@ -545,25 +567,6 @@ private struct AirliftFilesTab: View {
                         .disabled(newFolderName.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
-
-            Section {
-                TextField("相对当前根的路径，可含 ..", text: $statPath)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .font(.system(.caption, design: .monospaced))
-                Button("查一下") { Task { await doStat() } }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .tint(AppTheme.accent)
-                if !statResult.isEmpty {
-                    Text(statResult).font(.caption).foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            } header: {
-                Text("探测任意路径")
-            } footer: {
-                Text("Media 之外读 / 写 / 列都会被沙盒拒，但 stat 能过 —— 一次 AFC 往返、几十毫秒.")
-            }
         }
         .listStyle(.insetGrouped)
         .busyOverlay(loading, title: "读取中…")
@@ -633,7 +636,7 @@ private struct AirliftFilesTab: View {
         defer { loading = false }
         let json = await airliftCall("afc.list", AirliftJSON.json(["root": root, "path": path]))
         let dict = AirliftJSON.dict(json)
-        guard AirliftJSON.bool(dict, "ok") == true else {
+        guard airliftOK(dict) else {
             errorText = AirliftJSON.string(dict, "error") ?? json
             entries = []
             return
@@ -673,7 +676,7 @@ private struct AirliftFilesTab: View {
                                      AirliftJSON.json(["root": root, "path": entry.path,
                                                        "encoding": "utf8"]))
         let dict = AirliftJSON.dict(json)
-        previewText = AirliftJSON.bool(dict, "ok") == true
+        previewText = airliftOK(dict)
             ? (AirliftJSON.string(dict, "data") ?? "")
             : (AirliftJSON.string(dict, "error") ?? json)
     }
@@ -717,7 +720,7 @@ private struct AirliftFilesTab: View {
         let json = await airliftCall("afc.delete",
                                      AirliftJSON.json(["root": root, "path": entry.path]))
         let dict = AirliftJSON.dict(json)
-        if AirliftJSON.bool(dict, "ok") != true {
+        if !airliftOK(dict) {
             errorText = AirliftJSON.string(dict, "error") ?? json
         }
         deleteEntry = nil
@@ -731,7 +734,7 @@ private struct AirliftFilesTab: View {
         let json = await airliftCall("afc.mkdir",
                                      AirliftJSON.json(["root": root, "path": "\(base)/\(name)"]))
         let dict = AirliftJSON.dict(json)
-        if AirliftJSON.bool(dict, "ok") == true {
+        if airliftOK(dict) {
             newFolderName = ""
         } else {
             errorText = AirliftJSON.string(dict, "error") ?? json
@@ -739,19 +742,6 @@ private struct AirliftFilesTab: View {
         await load()
     }
 
-    private func doStat() async {
-        let value = statPath.trimmingCharacters(in: .whitespaces)
-        guard !value.isEmpty else { return }
-        let json = await airliftCall("afc.stat", AirliftJSON.json(["root": root, "path": value]))
-        let dict = AirliftJSON.dict(json)
-        if AirliftJSON.bool(dict, "exists") == true {
-            statResult = "存在 · \(AirliftJSON.string(dict, "ifmt") ?? "?")"
-                + " · \(byteText(AirliftJSON.int(dict, "size") ?? 0))"
-        } else {
-            statResult = AirliftJSON.string(dict, "describe")
-                ?? AirliftJSON.string(dict, "error") ?? "取不到"
-        }
-    }
 }
 
 // MARK: - 写入（AIR + airlift）
@@ -762,8 +752,6 @@ private struct AirliftOverwriteTab: View {
     @State private var target = ""
     @State private var airFiles: [AirFile] = []
     @State private var selectedAirName: String?
-    @State private var targetIsDirectory = false
-    @State private var leafName = ""
     @State private var backupFirst = true
     @State private var working = false
     @State private var importing = false
@@ -772,6 +760,12 @@ private struct AirliftOverwriteTab: View {
     @State private var steps: [String] = []
     @State private var errorText: String?
     @State private var okText: String?
+    /// 点「覆盖」时**自动识别**出来的落点（用户要求：不要手动开关目录/文件）
+    @State private var resolved: (isDir: Bool, leaf: String?)?
+    /// 批量选择（用户要求：源文件也要能批量/全选删除）
+    @State private var selecting = false
+    @State private var picked = Set<String>()
+    @State private var confirmingBatchDelete = false
 
     private struct AirFile: Identifiable {
         let name: String
@@ -786,16 +780,11 @@ private struct AirliftOverwriteTab: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .font(.system(.caption, design: .monospaced))
-                Toggle("目标是目录（写到它下面）", isOn: $targetIsDirectory)
-                if targetIsDirectory {
-                    TextField("文件名（留空 = 用源文件名）", text: $leafName)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                }
             } header: {
                 Text("目标")
             } footer: {
-                Text(targetIsDirectory ? "落点 = 目标目录 / 文件名" : "落点 = 上面填的这个路径本身")
+                Text("目录还是文件**自动识别**（问设备，不用你选）. "
+                     + "目标是目录时，落到目录下、用源文件名.")
             }
 
             Section {
@@ -805,13 +794,24 @@ private struct AirliftOverwriteTab: View {
                 }
                 ForEach(airFiles) { file in
                     Button {
-                        selectedAirName = file.name
+                        if selecting {
+                            togglePick(file.name)
+                        } else {
+                            selectedAirName = file.name
+                        }
                     } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: selectedAirName == file.name
-                                  ? "largecircle.fill.circle" : "circle")
-                                .foregroundColor(selectedAirName == file.name
-                                                 ? AppTheme.accent : .secondary)
+                            if selecting {
+                                Image(systemName: picked.contains(file.name)
+                                      ? "checkmark.circle.fill" : "circle")
+                                    .foregroundColor(picked.contains(file.name)
+                                                     ? AppTheme.accent : .secondary)
+                            } else {
+                                Image(systemName: selectedAirName == file.name
+                                      ? "largecircle.fill.circle" : "circle")
+                                    .foregroundColor(selectedAirName == file.name
+                                                     ? AppTheme.accent : .secondary)
+                            }
                             Text(file.name)
                                 .font(.system(.caption, design: .monospaced))
                                 .foregroundColor(.primary).lineLimit(1)
@@ -821,31 +821,48 @@ private struct AirliftOverwriteTab: View {
                     }
                     .swipeActions(edge: .trailing) {
                         Button(role: .destructive) {
-                            Task { await deleteAirFile(file.name) }
+                            Task { await deleteAirFiles([file.name]) }
                         } label: {
                             Label("移除", systemImage: "trash")
                         }
                     }
                 }
-                Button {
-                    importing = true
-                } label: {
-                    Label("从本机选择文件导入", systemImage: "square.and.arrow.down")
+                if !selecting {
+                    Button {
+                        importing = true
+                    } label: {
+                        Label("从本机选择文件导入", systemImage: "square.and.arrow.down")
+                    }
+                    Button {
+                        Task { await pullToAir() }
+                    } label: {
+                        Label("把目标读回来（不改动目标）", systemImage: "arrow.down.doc")
+                    }
+                    .disabled(working || target.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                Button {
-                    Task { await pullToAir() }
-                } label: {
-                    Label("把目标读回来（不改动目标）", systemImage: "arrow.down.doc")
-                }
-                .disabled(working || target.trimmingCharacters(in: .whitespaces).isEmpty)
             } header: {
-                Text("源文件（AIR）")
+                HStack {
+                    Text("源文件（AIR，\(airFiles.count) 个）")
+                    Spacer()
+                    if !airFiles.isEmpty {
+                        Button(selecting ? "完成" : "选择") {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                selecting.toggle()
+                                if !selecting { picked.removeAll() }
+                            }
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .textCase(nil)
+                    }
+                }
             } footer: {
-                Text("源文件先落进 AIR（AFC 根下，读写是瞬时的），再用 airlift 覆盖目标.")
+                Text(selecting
+                     ? "选中后可一次删掉多个."
+                     : "源文件先落进 AIR（AFC 根下，读写是瞬时的），再用 airlift 覆盖目标.")
             }
 
             Section("选项") {
-                Toggle("覆盖前先把目标备份到 AIR（.bak）", isOn: $backupFirst)
+                Toggle("覆盖前先备份原内容", isOn: $backupFirst)
                 Button(role: .destructive) {
                     confirmingDelete = true
                 } label: {
@@ -869,18 +886,50 @@ private struct AirliftOverwriteTab: View {
         .listStyle(.insetGrouped)
         .busyOverlay(working, title: "执行中…")
         .safeAreaInset(edge: .bottom) {
-            BottomActionBar {
-                Button {
-                    confirming = true
-                } label: {
-                    Label("覆盖目标", systemImage: "square.and.arrow.up.on.square")
-                        .frame(maxWidth: .infinity)
+            if selecting {
+                HStack(spacing: 10) {
+                    Button {
+                        if picked.count == airFiles.count {
+                            picked.removeAll()
+                        } else {
+                            picked = Set(airFiles.map(\.name))
+                        }
+                    } label: {
+                        Label(picked.count == airFiles.count ? "取消全选" : "全选",
+                              systemImage: picked.count == airFiles.count
+                                  ? "circle.slash" : "checkmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+
+                    Button(role: .destructive) {
+                        confirmingBatchDelete = true
+                    } label: {
+                        Label("删除 \(picked.count) 个", systemImage: "trash")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .tint(.red)
+                    .disabled(picked.isEmpty)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .tint(AppTheme.accent)
-                .disabled(working || selectedAirName == nil
-                          || target.trimmingCharacters(in: .whitespaces).isEmpty)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(.bar)
+            } else {
+                BottomActionBar {
+                    Button {
+                        Task { await prepareOverwrite() }
+                    } label: {
+                        Label("覆盖目标", systemImage: "square.and.arrow.up.on.square")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .tint(AppTheme.accent)
+                    .disabled(working || selectedAirName == nil
+                              || target.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
             }
         }
         .task { await refreshAirList() }
@@ -892,15 +941,37 @@ private struct AirliftOverwriteTab: View {
             Button("覆盖", role: .destructive) { Task { await overwrite() } }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将用 AIR/\(selectedAirName ?? "?") 覆盖 \(target)."
-                 + (backupFirst ? "覆盖前会先备份原内容." : "已关闭备份."))
+            Text("落点：\(resolvedPath ?? "?")\n源：AIR/\(selectedAirName ?? "?")"
+                 + (backupFirst ? "\n覆盖前会先备份原内容." : "\n已关闭备份."))
         }
         .confirmationDialog("确认删除？", isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button("删除", role: .destructive) { Task { await deleteTarget() } }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将彻底删除 \(target). 备份会留在 App 沙盒的 LoginLogs/ 下.")
+            Text("将彻底删除 \(target). 原内容会先存进备份（「更多 → 备份与还原」里能看到）.")
         }
+        .confirmationDialog("删除选中的 \(picked.count) 个源文件？",
+                            isPresented: $confirmingBatchDelete, titleVisibility: .visible) {
+            Button("删除", role: .destructive) {
+                Task { await deleteAirFiles(Array(picked)) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只删 AIR 里的这些副本，设备上的目标文件不受影响.")
+        }
+    }
+
+    /// 自动识别后的落点（弹窗里显示给用户看）
+    private var resolvedPath: String? {
+        guard let resolved else { return nil }
+        let t = target.trimmingCharacters(in: .whitespaces)
+        guard resolved.isDir else { return t }
+        let leaf = resolved.leaf ?? selectedAirName ?? ""
+        return leaf.isEmpty ? t : t.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/" + leaf
+    }
+
+    private func togglePick(_ name: String) {
+        if picked.contains(name) { picked.remove(name) } else { picked.insert(name) }
     }
 
     private func refreshAirList() async {
@@ -914,15 +985,31 @@ private struct AirliftOverwriteTab: View {
         if let selected = selectedAirName, !airFiles.contains(where: { $0.name == selected }) {
             selectedAirName = nil
         }
+        picked = picked.filter { name in airFiles.contains { $0.name == name } }
     }
 
-    private func deleteAirFile(_ name: String) async {
-        let dict = AirliftJSON.dict(await airliftCall("airlift.air",
-                                                      AirliftJSON.json(["op": "delete", "name": name])))
-        if AirliftJSON.bool(dict, "ok") != true {
-            errorText = AirliftJSON.string(dict, "error") ?? ""
+    /// 一次删多个源文件（用户要求「源文件也要能批量/全选删除」）.
+    private func deleteAirFiles(_ names: [String]) async {
+        guard !names.isEmpty else { return }
+        working = true; errorText = nil; okText = nil
+        defer { working = false }
+        var failed: [String] = []
+        for name in names {
+            let dict = AirliftJSON.dict(await airliftCall("airlift.air",
+                                                          AirliftJSON.json(["op": "delete",
+                                                                            "name": name])))
+            if !airliftOK(dict) {
+                failed.append(name + "：" + (AirliftJSON.string(dict, "error") ?? "失败"))
+            }
+            if selectedAirName == name { selectedAirName = nil }
         }
-        if selectedAirName == name { selectedAirName = nil }
+        okText = failed.isEmpty ? "已删除 \(names.count) 个源文件"
+                                : "删了 \(names.count - failed.count) 个，\(failed.count) 个失败"
+        errorText = failed.isEmpty ? nil : failed.joined(separator: "\n")
+        withAnimation(.easeInOut(duration: 0.18)) {
+            selecting = false
+            picked.removeAll()
+        }
         await refreshAirList()
     }
 
@@ -938,7 +1025,7 @@ private struct AirliftOverwriteTab: View {
         let args = AirliftJSON.json(["op": "write", "name": url.lastPathComponent,
                                      "data": data.base64EncodedString(), "encoding": "base64"])
         let dict = AirliftJSON.dict(await airliftCall("airlift.air", args))
-        if AirliftJSON.bool(dict, "ok") == true {
+        if airliftOK(dict) {
             okText = "已导入 \(url.lastPathComponent)"
             errorText = nil
             await refreshAirList()
@@ -954,7 +1041,7 @@ private struct AirliftOverwriteTab: View {
         let json = await airliftCall("airlift.pull", AirliftJSON.json(["path": path]))
         let dict = AirliftJSON.dict(json)
         steps = AirliftJSON.strings(dict, "steps")
-        if AirliftJSON.bool(dict, "ok") == true {
+        if airliftOK(dict) {
             okText = "已读到 AIR：\(AirliftJSON.string(dict, "airName") ?? "?")"
             await refreshAirList()
             if let name = AirliftJSON.string(dict, "airName"), !name.isEmpty {
@@ -972,11 +1059,33 @@ private struct AirliftOverwriteTab: View {
         let json = await airliftCall("airlift.delete", AirliftJSON.json(["path": path]))
         let dict = AirliftJSON.dict(json)
         steps = AirliftJSON.strings(dict, "steps")
-        if AirliftJSON.bool(dict, "ok") == true {
+        if airliftOK(dict) {
             okText = "已删除 \(path)"
         } else {
             errorText = AirliftJSON.string(dict, "error") ?? json
         }
+    }
+
+    /// 点「覆盖」时**先自动识别落点**，把识别结果显示在确认弹窗里，再让用户确认.
+    ///
+    /// ## 为什么不再让用户手动选「目录 / 文件」（用户要求）
+    /// 用户：「不要有手动开关目标路径是否为目录还是文件，你不能自动识别吗」
+    /// ⇒ 用 `afc.stat` 问设备（**几十毫秒的 AFC 往返，Media 之外 stat 也能过**）：
+    ///   · 路径以 `/` 结尾 ⇒ 目录
+    ///   · stat 回 `isDir = true` ⇒ 目录，落到它下面、用源文件名
+    ///   · 其余 ⇒ 文件
+    /// 识别不出来（stat 失败）时**按文件处理**（最保守），并且弹窗里会把落点写清楚，
+    /// 用户能当场看见我们打算写到哪 —— 不会有「悄悄写错地方」.
+    private func prepareOverwrite() async {
+        let path = target.trimmingCharacters(in: .whitespaces)
+        var isDir = path.hasSuffix("/")
+        if !isDir {
+            let dict = AirliftJSON.dict(await airliftCall("afc.stat",
+                                                          AirliftJSON.json(["path": path])))
+            isDir = AirliftJSON.bool(dict, "isDir") == true
+        }
+        resolved = (isDir: isDir, leaf: isDir ? selectedAirName : nil)
+        confirming = true
     }
 
     private func overwrite() async {
@@ -987,15 +1096,14 @@ private struct AirliftOverwriteTab: View {
             "airName": selectedAirName ?? "",
             "backup": backupFirst,
         ]
-        if targetIsDirectory {
+        if let resolved, resolved.isDir {
             payload["targetIsDirectory"] = true
-            let leaf = leafName.trimmingCharacters(in: .whitespaces)
-            if !leaf.isEmpty { payload["leafName"] = leaf }
+            if let leaf = resolved.leaf, !leaf.isEmpty { payload["leafName"] = leaf }
         }
         let json = await airliftCall("airlift.overwrite", AirliftJSON.json(payload))
         let dict = AirliftJSON.dict(json)
         steps = AirliftJSON.strings(dict, "steps")
-        if AirliftJSON.bool(dict, "ok") == true {
+        if airliftOK(dict) {
             okText = "已写入 \(AirliftJSON.string(dict, "target") ?? "")"
         } else {
             errorText = AirliftJSON.string(dict, "error") ?? json
@@ -1191,7 +1299,7 @@ private struct AirliftThemeTab: View {
                                                        "encoding": "base64"]))
         let dict = AirliftJSON.dict(json)
         steps = AirliftJSON.strings(dict, "steps")
-        if AirliftJSON.bool(dict, "ok") == true {
+        if airliftOK(dict) {
             okText = "已写入 \(theme.keys.count) 个按键到 \(targetDir)"
         } else {
             errorText = AirliftJSON.string(dict, "error") ?? json
@@ -1537,7 +1645,7 @@ private struct AirliftSupervisedTab: View {
         let dict = AirliftJSON.dict(await airliftCall("sys.supervised.set",
                                                       AirliftJSON.json(payload)))
         steps = AirliftJSON.strings(dict, "steps")
-        if AirliftJSON.bool(dict, "ok") != true {
+        if !airliftOK(dict) {
             errorText = AirliftJSON.string(dict, "error") ?? ""
         }
         if AirliftJSON.bool(dict, "verified") == true,
@@ -1569,6 +1677,7 @@ private struct AirliftBackupsTab: View {
     @State private var working = false
     @State private var note = ""
     @State private var confirmRestore: (path: String, version: Int)?
+    @State private var confirmAirRestore: (path: String, name: String)?
 
     struct Group: Identifiable {
         var id: String { path }
@@ -1578,6 +1687,8 @@ private struct AirliftBackupsTab: View {
         let currentBytes: Int?
         /// 设备上**当前**内容的顶层键数（同上）
         let currentKeys: Int?
+        /// `Media/AIR/` 里同源的副本（AFC 直读，秒级）
+        let airSources: [AirCopy]
     }
     struct Ver: Identifiable {
         var id: Int { index }
@@ -1588,11 +1699,25 @@ private struct AirliftBackupsTab: View {
         let keys: Int?
         let note: String
     }
+    /// `AIR/` 里的一份副本（用「写入」那条路还原）
+    struct AirCopy: Identifiable {
+        var id: String { name }
+        let name: String
+        let bytes: Int
+        let keys: Int?
+    }
 
     /// 一份备份的副标题：`09-24 09:41 · 5764 B · 49 键`
     private func subtitle(_ v: Ver) -> String {
         var parts = [shortTime(v.time), byteText(v.bytes)]
         if let k = v.keys { parts.append("\(k) 键") }
+        return parts.joined(separator: "  ·  ")
+    }
+
+    /// AIR 副本的副标题：`5764 B · 49 键`
+    private func copySubtitle(_ c: AirCopy) -> String {
+        var parts = [byteText(c.bytes)]
+        if let k = c.keys { parts.append("\(k) 键") }
         return parts.joined(separator: "  ·  ")
     }
 
@@ -1607,8 +1732,9 @@ private struct AirliftBackupsTab: View {
                 .disabled(loading || working)
             } footer: {
                 if note.isEmpty {
-                    Text("每次覆盖前都会存一份快照. **1 号是最早的一份**，永不覆盖. "
-                         + "每份都标了键数/字节 —— 哪份是完好的由你看数据判断，我们不替你挑.")
+                    Text("每份都标了**键数 / 字节 / 时间** —— 哪份完好由你看数据判断，我们不替你挑.\n"
+                         + "「AIR」那几行是 `Media/AIR/` 里的同源副本（AFC 直读，秒出）—— "
+                         + "**备份序号全是坏的时候，好数据往往在这里**.")
                 } else {
                     Text(note).foregroundColor(AppTheme.accent)
                 }
@@ -1656,6 +1782,28 @@ private struct AirliftBackupsTab: View {
                         }
                         .disabled(working)
                     }
+                    // AIR 里的同源副本 —— 用户那次「救不回」，能救数据的那份其实一直躺在这里
+                    ForEach(group.airSources) { copy in
+                        Button {
+                            confirmAirRestore = (group.path, copy.name)
+                        } label: {
+                            HStack(spacing: 10) {
+                                SizePill(text: "AIR", tint: .purple)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(copy.name.hasSuffix(".bak") ? "AIR 副本（覆盖前自动留的）"
+                                                                     : "AIR 副本")
+                                        .font(.callout).foregroundColor(.primary)
+                                    Text(copySubtitle(copy))
+                                        .font(.system(.caption2, design: .monospaced))
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.counterclockwise")
+                                    .font(.caption).foregroundColor(AppTheme.accent)
+                            }
+                        }
+                        .disabled(working)
+                    }
                 } header: {
                     Text(group.path)
                         .font(.system(.caption2, design: .monospaced))
@@ -1676,7 +1824,31 @@ private struct AirliftBackupsTab: View {
         } message: {
             Text(restoreMessage)
         }
+        .confirmationDialog(airRestoreTitle,
+                            isPresented: Binding(get: { confirmAirRestore != nil },
+                                                 set: { if !$0 { confirmAirRestore = nil } }),
+                            titleVisibility: .visible) {
+            Button("还原", role: .destructive) {
+                if let target = confirmAirRestore { Task { await restoreFromAir(target) } }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(airRestoreMessage)
+        }
         .task { await reload() }
+    }
+
+    private var airRestoreTitle: String {
+        "用 AIR 副本还原？"
+    }
+
+    private var airRestoreMessage: String {
+        guard let c = confirmAirRestore else { return "" }
+        let copy = groups.first { $0.path == c.path }?.airSources.first { $0.name == c.name }
+        var msg = "把 \(c.path) 覆盖成 AIR/\(c.name)"
+        if let copy { msg += "（\(copySubtitle(copy))）" }
+        msg += ". 覆盖前会先给当前内容存一份快照."
+        return msg
     }
 
     /// 被选中要还原的那一份（弹窗里要显示它的键数/字节，别让用户盲选）
@@ -1717,12 +1889,34 @@ private struct AirliftBackupsTab: View {
                            note: (v["note"] as? String) ?? "")
             }
             if !versions.isEmpty {
+                let copies = ((d2?["airSources"] as? [[String: Any]]) ?? []).compactMap { c -> AirCopy? in
+                    guard let name = c["name"] as? String else { return nil }
+                    return AirCopy(name: name, bytes: (c["bytes"] as? Int) ?? 0,
+                                   keys: c["keys"] as? Int)
+                }
                 out.append(Group(path: path, versions: versions,
                                  currentBytes: d2?["currentBytes"] as? Int,
-                                 currentKeys: d2?["currentKeys"] as? Int))
+                                 currentKeys: d2?["currentKeys"] as? Int,
+                                 airSources: copies))
             }
         }
         groups = out
+    }
+
+    /// 用 `AIR/` 里的副本还原 —— 走「写入」那条路（`airlift.overwrite` + `airName`），
+    /// 不是 `airlift.restore`（那个只认带序号的 `AirliftBackups/`）.
+    private func restoreFromAir(_ target: (path: String, name: String)) async {
+        working = true
+        defer { working = false }
+        let dict = AirliftJSON.dict(await airliftCall("airlift.overwrite",
+                                                      AirliftJSON.json(["target": target.path,
+                                                                        "airName": target.name,
+                                                                        "backup": true])))
+        note = airliftOK(dict)
+            ? "已用 AIR/\(target.name) 还原 \(target.path)"
+            : "还原失败：" + (AirliftJSON.string(dict, "error") ?? "见日志")
+        confirmAirRestore = nil
+        await reload()
     }
 
     private func restore(_ target: (path: String, version: Int)) async {
@@ -1731,7 +1925,7 @@ private struct AirliftBackupsTab: View {
         let dict = AirliftJSON.dict(await airliftCall("airlift.restore",
                                                       AirliftJSON.json(["path": target.path,
                                                                         "version": target.version])))
-        note = AirliftJSON.bool(dict, "ok") == true
+        note = airliftOK(dict)
             ? "已还原 \(target.path) 到第 \(target.version) 份"
             : "还原失败：" + (AirliftJSON.string(dict, "error") ?? "见日志")
         confirmRestore = nil
@@ -1805,6 +1999,33 @@ private struct AirliftTweaksTab: View {
     @State private var loading = false
     @State private var working = false
     @State private var note = ""
+    /// 当前在忙什么 —— 决定遮罩文案（用户反馈「点从设备重读，怎么显示是写入中」）
+    @State private var phase = Phase.idle
+    /// 正在读第几个文件 / 共几个（读取每个 10~20 秒，必须让用户看见进度）
+    @State private var readProgress = (done: 0, total: 0)
+
+    private enum Phase {
+        case idle, reading, writing
+        var title: String {
+            switch self {
+            case .idle: return ""
+            case .reading: return "读取中…"
+            case .writing: return "写入中…"
+            }
+        }
+    }
+
+    /// 本页涉及的三个文件（去重，且顺序稳定）
+    private var files: [String] {
+        var seen: [String] = []
+        for t in Self.tweaks where !seen.contains(t.file) { seen.append(t.file) }
+        return seen
+    }
+
+    /// 短文件名（遮罩里显示，别把整条路径糊上去）
+    private func shortFile(_ path: String) -> String {
+        path.split(separator: "/").last.map(String.init) ?? path
+    }
 
     private var sections: [String] {
         var seen: [String] = []
@@ -1816,16 +2037,16 @@ private struct AirliftTweaksTab: View {
         List {
             Section {
                 Button {
-                    Task { await forceRefresh() }
+                    Task { await readFromDevice() }
                 } label: {
-                    Label("从设备重读（慢，每个文件约 10~20 秒）", systemImage: "arrow.triangle.2.circlepath")
+                    Label("从设备重读（每个文件约 10~20 秒）", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .disabled(loading || working)
             } footer: {
                 Text(note.isEmpty
                      ? "键名与值照 Nugget 抄. **关掉开关 = 删掉这个键 = 回到系统默认**（Nugget 的「Default」语义）.\n"
-                       + "读取走**本地缓存**：首次进本页要读一遍（约 10~20 秒/文件），之后**秒开**；"
-                       + "改一次值 = 写一次 airlift（约 10~20 秒）.\n"
+                       + "进本页会**真的从设备读一遍**（不是拿缓存糊弄你）；改一次值 = 写一次 airlift.\n"
+                       + "读写都会**先让偏好服务（cfprefsd）松手** —— 它占着这几个 plist，不松手读不到也守不住.\n"
                        + "改完**多数要 respring / 重启**才看得到效果."
                      : note)
                     .foregroundColor(note.isEmpty ? .secondary : AppTheme.accent)
@@ -1863,8 +2084,15 @@ private struct AirliftTweaksTab: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
-        .busyOverlay(loading || working, title: working ? "写入中…" : "读取中…")
-        .task { await reload() }
+        .busyOverlay(loading || working, title: busyTitle)
+        .task { await readFromDevice() }
+    }
+
+    /// 遮罩文案：读就写「读取中」，写就写「写入中」（用户反馈过这里显示错了）.
+    /// 读的时候带上进度 —— 每个文件 10~20 秒，没有进度用户只会以为卡死.
+    private var busyTitle: String {
+        guard phase == .reading, readProgress.total > 0 else { return phase.title }
+        return "读取中 \(readProgress.done + 1)/\(readProgress.total)…"
     }
 
     private func isOn(_ tweak: Tweak) -> Bool {
@@ -1874,12 +2102,45 @@ private struct AirliftTweaksTab: View {
         return value == "\(tweak.onValue)"
     }
 
-    /// 读当前值. **走缓存** ⇒ 第二次进本页是秒开的.
+    /// **真的从设备读一遍**（用户要求：进本页不要拿上一轮的缓存糊弄）.
+    ///
+    /// 每个文件一次 airlift 读（10~20 秒），三个文件最多 ~60 秒 ⇒ **必须显示进度**，
+    /// 否则用户只会觉得卡死. 失败的文件如实报出名字（读本来就不稳，不是全部都会成）.
+    private func readFromDevice() async {
+        working = true
+        phase = .reading
+        defer { working = false; phase = .idle; readProgress = (0, 0) }
+        let list = files
+        readProgress = (0, list.count)
+        var out: [String: [String: String]] = [:]
+        var failed: [String] = []
+        for (index, file) in list.enumerated() {
+            readProgress = (index, list.count)
+            let dict = AirliftJSON.dict(await airliftCall("plist.tweak",
+                                                          AirliftJSON.json(["path": file,
+                                                                            "refresh": true])))
+            if !airliftOK(dict) {
+                failed.append(shortFile(file))
+            }
+        }
+        // 读完后统一取一遍（此时读成功的已在宿主的本地缓存里，这一遍是秒级的）
+        for file in list {
+            let dict = AirliftJSON.dict(await airliftCall("plist.tweak",
+                                                          AirliftJSON.json(["path": file, "list": true])))
+            out[file] = (dict?["keys"] as? [String: String]) ?? [:]
+        }
+        keysByFile = out
+        note = failed.isEmpty
+            ? "已从设备重读 \(list.count) 个文件"
+            : "\(failed.count) 个文件没读成功：\(failed.joined(separator: "、"))（读本来就不稳，可再点一次）"
+    }
+
+    /// 只从宿主的本地缓存取一遍（改完值后用 —— 那时缓存就是刚写进去的内容，秒级）
     private func reload() async {
         loading = true
         defer { loading = false }
         var out: [String: [String: String]] = [:]
-        for file in Set(Self.tweaks.map(\.file)) {
+        for file in files {
             let dict = AirliftJSON.dict(await airliftCall("plist.tweak",
                                                           AirliftJSON.json(["path": file, "list": true])))
             out[file] = (dict?["keys"] as? [String: String]) ?? [:]
@@ -1887,32 +2148,16 @@ private struct AirliftTweaksTab: View {
         keysByFile = out
     }
 
-    /// 强制从设备重读（慢）—— 只有用户主动点才走这条.
-    private func forceRefresh() async {
-        working = true
-        defer { working = false }
-        var failed: [String] = []
-        for file in Set(Self.tweaks.map(\.file)) {
-            let dict = AirliftJSON.dict(await airliftCall("plist.tweak",
-                                                          AirliftJSON.json(["path": file,
-                                                                            "refresh": true])))
-            if AirliftJSON.bool(dict, "ok") != true { failed.append(file) }
-        }
-        note = failed.isEmpty
-            ? "已从设备重读全部文件"
-            : "有 \(failed.count) 个文件没读成功（可稍后再试）"
-        await reload()
-    }
-
     private func apply(_ tweak: Tweak, on: Bool) async {
         working = true
-        defer { working = false }
+        phase = .writing
+        defer { working = false; phase = .idle }
         var payload: [String: Any] = ["path": tweak.file, "key": tweak.key]
         if on { payload["value"] = tweak.onValue }      // 不传 value = 删键
         let dict = AirliftJSON.dict(await airliftCall("plist.tweak", AirliftJSON.json(payload)))
-        note = AirliftJSON.bool(dict, "ok") == true
+        note = airliftOK(dict)
             ? (on ? "已写入 \(tweak.key) = \(tweak.onValue)" : "已删键 \(tweak.key)（回到系统默认）")
-              + " · 多数要 respring / 重启才生效"
+              + " · 已让偏好服务重读，多数还要 respring / 重启"
             : "失败：" + (AirliftJSON.string(dict, "error") ?? "见日志")
         await reload()
     }
