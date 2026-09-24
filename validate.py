@@ -85,6 +85,8 @@ KNOWN_CAPABILITIES = {
     "afc.stat",
     "airlift.delete",
     "airlift.writeMany",
+    "airlift.changes",
+    "airlift.changes.clear",
     "apps.lookup",
     "afc.list",
     "afc.read",

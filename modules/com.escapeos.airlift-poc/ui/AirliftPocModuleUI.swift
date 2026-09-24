@@ -1216,6 +1216,12 @@ private struct AirliftMoreTab: View {
                              subtitle: "改 CloudConfigurationDetails.plist 的 IsSupervised")
                 }
                 NavigationLink {
+                    AirliftChangesTab()
+                } label: {
+                    MoreCard(icon: "clock.arrow.circlepath", title: "改动记录",
+                             subtitle: "airlift 改过哪些文件 / 加了什么，都在这")
+                }
+                NavigationLink {
                     AirliftLogTab()
                 } label: {
                     MoreCard(icon: "text.alignleft", title: "调用日志",
@@ -1522,6 +1528,146 @@ private struct AirliftSupervisedTab: View {
         } else {
             await readState()
         }
+    }
+}
+
+// MARK: - 改动记录
+
+/// 「改动记录」：airlift 越界改过哪些文件.
+///
+/// ## 为什么要有这一页（用户要求）
+/// 「如果新增的文件要记忆防止以后不知道改了啥文件加了啥东西」.
+/// airlift 写完 `/var/mobile/Library/**` 之后设备上**没有任何痕迹**，
+/// 时间一长就成了「不知道哪来的文件」，想回滚也无从下手.
+private struct AirliftChangesTab: View {
+    @State private var entries: [Row] = []
+    @State private var loading = false
+    @State private var clearing = false
+    @State private var markdownPath = ""
+
+    struct Row: Identifiable {
+        let id = UUID()
+        let time: String
+        let action: String
+        let path: String
+        let bytes: Int
+        let backup: String
+        let verified: Bool
+    }
+
+    private var actionLabel: (String) -> (String, Color) {
+        { action in
+            switch action {
+            case "write": return ("写入", .green)
+            case "write-failed": return ("写入失败", .orange)
+            case "delete": return ("删除", .red)
+            case "delete-failed": return ("删除失败", .orange)
+            default: return (action, .secondary)
+            }
+        }
+    }
+
+    var body: some View {
+        List {
+            Section {
+                Button {
+                    Task { await reload() }
+                } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
+                .disabled(loading)
+                Button(role: .destructive) {
+                    clearing = true
+                } label: {
+                    Label("清空记录", systemImage: "trash")
+                }
+                .disabled(entries.isEmpty || clearing)
+            } header: {
+                Text("操作")
+                    .font(.footnote.weight(.semibold)).textCase(nil).foregroundColor(.secondary)
+            } footer: {
+                Text("清空只删记录，**设备上的文件不会被动**. "
+                     + "记录同时写了一份人可读的 markdown，SSH 里可以直接 cat：\n\(markdownPath)")
+                    .font(.caption2)
+            }
+
+            if entries.isEmpty {
+                Section {
+                    Text(loading ? "读取中…" : "还没有改动记录. 用「写入」改一次就会出现.")
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Section {
+                ForEach(entries) { row in
+                    let info = actionLabel(row.action)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            SizePill(text: info.0, tint: info.1)
+                            Text(row.time)
+                                .font(.caption2).foregroundColor(.secondary)
+                            Spacer()
+                            if row.bytes > 0 {
+                                Text(byteText(row.bytes))
+                                    .font(.caption2).foregroundColor(.secondary)
+                            }
+                            if row.verified {
+                                Image(systemName: "checkmark.seal.fill")
+                                    .font(.caption2).foregroundColor(.green)
+                            }
+                        }
+                        Text(row.path)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if !row.backup.isEmpty {
+                            Text("备份：\(row.backup)")
+                                .font(.caption2).foregroundColor(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            } header: {
+                Text("最近 \(entries.count) 条")
+                    .font(.footnote.weight(.semibold)).textCase(nil).foregroundColor(.secondary)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .busyOverlay(loading, title: "读取中…")
+        .confirmationDialog("清空改动记录？", isPresented: $clearing, titleVisibility: .visible) {
+            Button("清空", role: .destructive) { Task { await clear() } }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只删记录，设备上的文件不会被动.")
+        }
+        .task { await reload() }
+    }
+
+    private func reload() async {
+        loading = true
+        defer { loading = false }
+        let dict = AirliftJSON.dict(await airliftCall("airlift.changes",
+                                                      AirliftJSON.json(["limit": 200])))
+        markdownPath = AirliftJSON.string(dict, "markdownPath") ?? ""
+        let raw = (dict?["changes"] as? [[String: Any]]) ?? []
+        entries = raw.compactMap { item in
+            guard let path = item["path"] as? String else { return nil }
+            return Row(time: (item["time"] as? String) ?? "",
+                       action: (item["action"] as? String) ?? "",
+                       path: path,
+                       bytes: (item["bytes"] as? Int) ?? 0,
+                       backup: (item["backup"] as? String) ?? "",
+                       verified: (item["verified"] as? Bool) ?? false)
+        }
+    }
+
+    private func clear() async {
+        clearing = true
+        defer { clearing = false }
+        _ = await airliftCall("airlift.changes.clear", "{}")
+        await reload()
     }
 }
 
