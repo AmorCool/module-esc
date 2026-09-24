@@ -1255,9 +1255,8 @@ private struct AirliftMoreTab: View {
                     .textCase(nil)
                     .foregroundColor(.secondary)
             } footer: {
-                Text("airlift 每次运行都会在 Media 根建 airlift-src-* / airlift-canary-* / "
-                     + "airlift-link-* / airlift-recovered-* 这些临时目录，正常情况会被系统回收，"
-                     + "积多了可以在这里一次清掉. AIR/（你自己的源文件）与 Airlock/ 不会被删.")
+                Text("airlift 的临时目录现在统一放在 Media/Airlift/ 下，而且每次调用结束宿主会自动清一遍. "
+                     + "这里只是兜底. AIR/（你自己的源文件）与 Airlock/ 不会被删.")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -1300,23 +1299,36 @@ private struct AirliftMoreTab: View {
             return
         }
         let raw = (listDict?["entries"] as? [[String: Any]]) ?? []
-        let targets = raw.compactMap { $0["name"] as? String }
-            .filter { $0.hasPrefix("airlift-") }
+        let names = raw.compactMap { $0["name"] as? String }
 
-        guard !targets.isEmpty else {
+        // 两处都要清：
+        //  · 统一工作目录 `Airlift/` **里面**的（v0.3.512 起的正常位置）
+        //  · 根上的 `airlift-*`（v0.3.512 之前遗留的，一并收掉）
+        var paths: [String] = []
+        if names.contains("Airlift") {
+            let inner = await airliftCall("afc.list",
+                                          AirliftJSON.json(["root": "media", "path": "/Airlift"]))
+            let innerRaw = (AirliftJSON.dict(inner)?["entries"] as? [[String: Any]]) ?? []
+            paths += innerRaw.compactMap { $0["name"] as? String }
+                .filter { $0.hasPrefix("airlift-") }
+                .map { "/Airlift/\($0)" }
+        }
+        paths += names.filter { $0.hasPrefix("airlift-") }.map { "/\($0)" }
+
+        guard !paths.isEmpty else {
             cleanupNote = "没有需要清理的临时目录"
             return
         }
 
         var failed = 0
-        for name in targets {
+        for path in paths {
             let json = await airliftCall("afc.delete",
-                                         AirliftJSON.json(["root": "media", "path": "/\(name)"]))
+                                         AirliftJSON.json(["root": "media", "path": path]))
             if AirliftJSON.bool(AirliftJSON.dict(json), "ok") != true { failed += 1 }
         }
         cleanupNote = failed == 0
-            ? "已清理 \(targets.count) 个临时目录"
-            : "清理了 \(targets.count - failed) 个，\(failed) 个没删掉（可能被系统占用）"
+            ? "已清理 \(paths.count) 个临时目录"
+            : "清理了 \(paths.count - failed) 个，\(failed) 个没删掉（可能被系统占用）"
     }
 }
 
