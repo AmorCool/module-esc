@@ -265,11 +265,12 @@ func registerAirliftPocModuleUI() {
             ModuleUITab(id: "theme", title: "主题", systemImage: "keyboard") { m in
                 AirliftThemeTab(module: m)
             },
-            ModuleUITab(id: "supervised", title: "监督", systemImage: "lock.shield") { m in
-                AirliftSupervisedTab(module: m)
-            },
-            ModuleUITab(id: "log", title: "日志", systemImage: "text.alignleft") { m in
-                AirliftLogTab()
+            // ★ v0.3.512：监督 / 日志 收进「更多」——
+            //   iOS 的 TabView 超过 5 个 tab 会**自动**加一个系统「更多」溢出项，
+            //   那个页面长得跟主程序完全不一样（用户反馈过）. 自己做一个 5 个 tab
+            //   的布局就没有溢出项了，而且「更多」页能照主程序 MoreView 的样子做.
+            ModuleUITab(id: "more", title: "更多", systemImage: "ellipsis") { m in
+                AirliftMoreTab(module: m)
             },
         ]
     }
@@ -405,6 +406,10 @@ private struct AirliftFilesTab: View {
     @State private var newFolderName = ""
     @State private var statPath = ""
     @State private var statResult = ""
+    /// ★ v0.3.512：批量选择模式（用户要求「不能批量选择/全选删除操作吗」）
+    @State private var selecting = false
+    @State private var picked = Set<String>()      // entry.path
+    @State private var confirmingBatchDelete = false
 
     private struct AfcEntry: Identifiable {
         let name: String
@@ -465,23 +470,33 @@ private struct AirliftFilesTab: View {
                 }
                 ForEach(entries) { entry in
                     Button {
-                        if entry.isDir {
+                        if selecting {
+                            togglePick(entry)
+                        } else if entry.isDir {
                             Task { await enter(entry) }
                         } else {
                             Task { await preview(entry) }
                         }
                     } label: {
                         HStack(spacing: 10) {
+                            if selecting {
+                                Image(systemName: picked.contains(entry.path)
+                                      ? "checkmark.circle.fill" : "circle")
+                                    .foregroundColor(picked.contains(entry.path)
+                                                     ? AppTheme.accent : .secondary)
+                            }
                             Image(systemName: entry.isDir ? "folder.fill" : "doc")
                                 .foregroundColor(entry.isDir ? AppTheme.accent : .secondary)
                             Text(entry.name)
                                 .font(.callout).foregroundColor(.primary).lineLimit(1)
                             Spacer()
-                            if entry.isDir {
-                                Image(systemName: "chevron.right")
-                                    .font(.caption).foregroundColor(.secondary)
-                            } else {
-                                SizePill(text: byteText(entry.size), tint: .secondary)
+                            if !selecting {
+                                if entry.isDir {
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption).foregroundColor(.secondary)
+                                } else {
+                                    SizePill(text: byteText(entry.size), tint: .secondary)
+                                }
                             }
                         }
                     }
@@ -495,7 +510,20 @@ private struct AirliftFilesTab: View {
                     }
                 }
             } header: {
-                Text("内容（\(entries.count) 项）")
+                HStack {
+                    Text("内容（\(entries.count) 项）")
+                    Spacer()
+                    if !entries.isEmpty {
+                        Button(selecting ? "完成" : "选择") {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                selecting.toggle()
+                                if !selecting { picked.removeAll() }
+                            }
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .textCase(nil)
+                    }
+                }
             }
 
             Section("新建目录") {
@@ -532,6 +560,46 @@ private struct AirliftFilesTab: View {
         }
         .listStyle(.insetGrouped)
         .busyOverlay(loading, title: "读取中…")
+        .safeAreaInset(edge: .bottom) {
+            if selecting {
+                HStack(spacing: 10) {
+                    Button {
+                        if picked.count == entries.count {
+                            picked.removeAll()
+                        } else {
+                            picked = Set(entries.map(\.path))
+                        }
+                    } label: {
+                        Label(picked.count == entries.count ? "取消全选" : "全选",
+                              systemImage: picked.count == entries.count
+                                  ? "circle.dashed" : "checkmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+
+                    Button(role: .destructive) {
+                        confirmingBatchDelete = true
+                    } label: {
+                        Label("删除所选（\(picked.count)）", systemImage: "trash")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .tint(.red)
+                    .disabled(picked.isEmpty)
+                }
+                .padding(.horizontal, AppTheme.pageInset)
+                .padding(.vertical, 10)
+                .background(.regularMaterial)
+            }
+        }
+        .confirmationDialog("删除选中的 \(picked.count) 项？",
+                            isPresented: $confirmingBatchDelete, titleVisibility: .visible) {
+            Button("删除", role: .destructive) { Task { await deletePicked() } }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将从设备上彻底删除这些条目. 目录会连同里面的内容一起删.")
+        }
         .sheet(item: $previewEntry) { entry in
             NavigationStack {
                 ScrollView {
@@ -601,6 +669,40 @@ private struct AirliftFilesTab: View {
         previewText = AirliftJSON.bool(dict, "ok") == true
             ? (AirliftJSON.string(dict, "data") ?? "")
             : (AirliftJSON.string(dict, "error") ?? json)
+    }
+
+    private func togglePick(_ entry: AfcEntry) {
+        if picked.contains(entry.path) {
+            picked.remove(entry.path)
+        } else {
+            picked.insert(entry.path)
+        }
+    }
+
+    /// 批量删除. **逐个删**（AFC 没有批量接口），每删一个报一行；
+    /// 全失败 / 全成功都给一句总结，不留「点了没反应」的空白.
+    private func deletePicked() async {
+        let targets = entries.filter { picked.contains($0.path) }
+        guard !targets.isEmpty else { return }
+        loading = true
+        defer { loading = false }
+        var failed: [String] = []
+        for entry in targets {
+            let json = await airliftCall("afc.delete",
+                                         AirliftJSON.json(["root": root, "path": entry.path]))
+            if AirliftJSON.bool(AirliftJSON.dict(json), "ok") != true {
+                failed.append(entry.name)
+            }
+        }
+        if failed.isEmpty {
+            errorText = nil
+        } else {
+            errorText = "有 \(failed.count) 项没删掉：\(failed.prefix(5).joined(separator: ", "))"
+                + (failed.count > 5 ? " …" : "")
+        }
+        picked.removeAll()
+        selecting = false
+        await load()
     }
 
     private func deleteSelected() async {
@@ -1086,6 +1188,202 @@ private struct AirliftThemeTab: View {
             okText = "已写入 \(theme.keys.count) 个按键到 \(targetDir)"
         } else {
             errorText = AirliftJSON.string(dict, "error") ?? json
+        }
+    }
+}
+
+// MARK: - 更多（照主程序 MoreView 的样子）
+
+/// 「更多」页：把次级入口收在这里.
+///
+/// 刻意照 `EscapeOS/Views/MoreView.swift` 做：
+/// · `List` + `.listStyle(.insetGrouped)` + `.scrollContentBackground(.hidden)`
+/// · Section header 用 `.footnote.weight(.semibold)` + `.textCase(nil)`
+/// · 行用主程序的 **`MoreCard`**（`AppRowIcon` 蓝色 + 标题 + 副标题）—— 直接复用，不重画
+private struct AirliftMoreTab: View {
+    let module: EscapeModule
+
+    @State private var cleaning = false
+    @State private var cleanupNote = "删掉 Media 根下 airlift-* 的临时目录"
+
+    var body: some View {
+        List {
+            Section {
+                NavigationLink {
+                    AirliftSupervisedTab(module: module)
+                } label: {
+                    MoreCard(icon: "lock.shield.fill", title: "监督模式",
+                             subtitle: "改 CloudConfigurationDetails.plist 的 IsSupervised")
+                }
+                NavigationLink {
+                    AirliftLogTab()
+                } label: {
+                    MoreCard(icon: "text.alignleft", title: "调用日志",
+                             subtitle: "宿主能力调用的原始 JSON 往来")
+                }
+            } header: {
+                Text("功能")
+                    .font(.footnote.weight(.semibold))
+                    .textCase(nil)
+                    .foregroundColor(.secondary)
+            }
+
+            Section {
+                Button(role: .destructive) {
+                    Task { await cleanupTemp() }
+                } label: {
+                    HStack(spacing: 12) {
+                        AppRowIcon(systemName: "trash", tint: .red, symbolSize: 20, frameSize: 36)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("清理临时文件")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(.primary)
+                            Text(cleanupNote)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        if cleaning { ProgressView().controlSize(.small) }
+                    }
+                    .padding(.vertical, 6)
+                }
+                .disabled(cleaning)
+            } header: {
+                Text("维护")
+                    .font(.footnote.weight(.semibold))
+                    .textCase(nil)
+                    .foregroundColor(.secondary)
+            } footer: {
+                Text("airlift 每次运行都会在 Media 根建 airlift-src-* / airlift-canary-* / "
+                     + "airlift-link-* / airlift-recovered-* 这些临时目录，正常情况会被系统回收，"
+                     + "积多了可以在这里一次清掉. AIR/（你自己的源文件）与 Airlock/ 不会被删.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+
+            Section {
+                NavigationLink {
+                    AirliftAboutTab(module: module)
+                } label: {
+                    MoreCard(icon: "info.circle.fill", title: "关于本模块",
+                             subtitle: "版本 / 依赖的宿主能力 / 实现说明")
+                }
+            } header: {
+                Text("关于")
+                    .font(.footnote.weight(.semibold))
+                    .textCase(nil)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+    }
+
+    /// 清理 Media 根下的 `airlift-*` 临时项.
+    ///
+    /// ## 为什么不新开一个宿主能力
+    /// 列 + 删本来就有（`afc.list` / `afc.delete`，根是 media），
+    /// 在这里组合一下就行 —— 少一个能力就少一处要维护的接口.
+    ///
+    /// ## 刻意不删的两类
+    /// · `AIR/` —— 那是**用户自己的源文件**（导入进来准备覆盖用的）
+    /// · `Airlock/` —— airlift 的固定工作根，删了也会被下次运行重建，但没必要动
+    private func cleanupTemp() async {
+        cleaning = true
+        defer { cleaning = false }
+
+        let listJSON = await airliftCall("afc.list", AirliftJSON.json(["root": "media", "path": "/"]))
+        let listDict = AirliftJSON.dict(listJSON)
+        guard AirliftJSON.bool(listDict, "ok") == true else {
+            cleanupNote = "列目录失败：\(AirliftJSON.string(listDict, "error") ?? "见日志")"
+            return
+        }
+        let raw = (listDict?["entries"] as? [[String: Any]]) ?? []
+        let targets = raw.compactMap { $0["name"] as? String }
+            .filter { $0.hasPrefix("airlift-") }
+
+        guard !targets.isEmpty else {
+            cleanupNote = "没有需要清理的临时目录"
+            return
+        }
+
+        var failed = 0
+        for name in targets {
+            let json = await airliftCall("afc.delete",
+                                         AirliftJSON.json(["root": "media", "path": "/\(name)"]))
+            if AirliftJSON.bool(AirliftJSON.dict(json), "ok") != true { failed += 1 }
+        }
+        cleanupNote = failed == 0
+            ? "已清理 \(targets.count) 个临时目录"
+            : "清理了 \(targets.count - failed) 个，\(failed) 个没删掉（可能被系统占用）"
+    }
+}
+
+/// 关于页：说清这个模块「是什么、靠什么、边界在哪」.
+private struct AirliftAboutTab: View {
+    let module: EscapeModule
+
+    @State private var hostVersion = "…"
+    @State private var supportedCapabilities: [String] = []
+
+    var body: some View {
+        List {
+            Section {
+                HStack(spacing: 12) {
+                    AppRowIcon(systemName: "bolt.horizontal.circle.fill",
+                               tint: .purple, symbolSize: 20, frameSize: 40)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(module.name).font(.headline)
+                        Text("v\(module.version)").font(.caption).foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    SizePill(text: module.isUsable ? "可用" : "不可用",
+                             tint: module.isUsable ? .green : .orange)
+                }
+            }
+
+            Section {
+                Text("本模块**只声明能力、调宿主接口**，不自己实现漏洞利用.")
+                    .font(.caption).foregroundColor(.secondary)
+                Text("沙盒外的读写走宿主提供的 airlift（AirTraffic 同步漏洞）；"
+                     + "Media 与 CrashReporter 两个根走 AFC. "
+                     + "漏洞链以后被替换时，本模块一行都不用改.")
+                    .font(.caption).foregroundColor(.secondary)
+            } header: {
+                Text("实现说明")
+                    .font(.footnote.weight(.semibold)).textCase(nil).foregroundColor(.secondary)
+            }
+
+            Section {
+                Text("· 沙盒外只能读写**单个已知文件**，**不能列目录**
+"
+                     + "· 在 Media 之外**建不了目录**（沙盒允许建文件、不允许建目录）
+"
+                     + "· 把 Media 之外的**目录**搬进来是单向的（搬不回去）—— 已禁用该能力")
+                    .font(.caption).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } header: {
+                Text("已知边界")
+                    .font(.footnote.weight(.semibold)).textCase(nil).foregroundColor(.secondary)
+            }
+
+            Section {
+                LabeledContent("宿主版本", value: hostVersion)
+                LabeledContent("模块版本", value: module.version)
+                LabeledContent("声明的能力", value: "\(module.requires?.count ?? 0) 项")
+            } header: {
+                Text("版本")
+                    .font(.footnote.weight(.semibold)).textCase(nil).foregroundColor(.secondary)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .task {
+            let dict = AirliftJSON.dict(await airliftCall("host.version", "{}"))
+            let v = AirliftJSON.string(dict, "version") ?? "未知"
+            let b = AirliftJSON.string(dict, "build") ?? ""
+            hostVersion = b.isEmpty ? v : "\(v) (\(b))"
         }
     }
 }
