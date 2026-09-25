@@ -80,13 +80,13 @@ private struct BottomActionBar<Content: View>: View {
 
 /// 把能力返回的「步骤」原文清成**给人看的短句**.
 ///
-/// 能力返回的步骤里带大量给开发者的解释：`⚠️`、`▸`、markdown 的 `**` 与反引号、
+/// 能力返回的步骤里带大量给开发者的解释：``、`▸`、markdown 的 `**` 与反引号、
 /// 以及括号里那串「为什么 / 判据 / 边界」. 那些在**日志**里有用，在**界面**上是噪音.
 /// 这里只留「做了什么、成没成」；原文照样能在展开后的「全部行」和日志里看到.
 private enum StepText {
     static func clean(_ raw: String) -> String {
         var text = raw
-        for junk in ["⚠️", "\u{FE0F}", "▸", "**", "`", "❌", "✅"] {
+        for junk in ["", "\u{FE0F}", "▸", "**", "`", "❌", "✅"] {
             text = text.replacingOccurrences(of: junk, with: "")
         }
         for pair in [("（", "）"), ("(", ")")] {
@@ -100,20 +100,28 @@ private enum StepText {
     }
 }
 
-/// 步骤区块：默认**只留 2~4 行真正有信息的**，其余折起来. 用普通 `Section`（不自造卡片）.
+/// 步骤区块.
 ///
-/// ## 为什么从「黑名单」改成「白名单」（用户反馈「注释太多了 精简掉 废话那么多」）
+/// ## 两种形态
+/// - `compact: false`（默认）：默认只留 2~4 行真正有信息的，其余折起来.
+/// - `compact: true`：**默认一行都不显示**，只给一个「执行细节 N 行」按钮 ——
+///   写入板块用这个（用户反馈「写的过程注释太多了 极致精简一下」）.
+///   成功/失败本来就由 `okText` / `errorText` 一行说清了，过程是给排障看的，不该占屏幕.
+///
+/// ## 为什么从「黑名单」改成「白名单」
 /// 旧实现是「排除一批噪音关键词」—— 那是**漏的**：`清单里有没有我们那条`、
 /// `0) 变体 4：`、`读到 AssetManifest`、`关键结论：组(d)` 这些都不在黑名单里，
 /// 于是一次写入能刷出十几行给开发者看的判据原文.
-/// ⇒ 反过来做：**只保留少量「做了什么 / 成没成」的句子**，其余全部收进「显示全部」.
+/// ⇒ 反过来做：**只保留少量「做了什么 / 成没成」的句子**，其余全部收进「细节」.
 /// 判据原文一行都没丢，只是**默认不糊在你脸上**（展开或看日志都在）.
 private struct StepsSection: View {
     let steps: [String]
     var title: String = "执行步骤"
+    /// `true` = 默认收起成一行按钮（写入板块用）
+    var compact: Bool = false
     @State private var expanded = false
 
-    /// 白名单：命中这些片段的行才默认显示.
+    /// 白名单：命中这些片段的行才默认显示（非 compact 时）
     private static let keep: [String] = [
         "stage 已发出",              // 第①步：归档发出去了
         "清单里有没有我们那条",       // 第②步：设备认了我们那条 asset
@@ -131,29 +139,31 @@ private struct StepsSection: View {
     var body: some View {
         if !steps.isEmpty {
             Section {
-                ForEach(Array((expanded ? steps : keySteps).enumerated()), id: \.offset) { _, step in
-                    HStack(alignment: .top, spacing: 8) {
-                        Circle()
-                            .fill(isBad(step) ? Color.red
-                                  : (isGood(step) ? Color.green : Color.secondary.opacity(0.4)))
-                            .frame(width: 6, height: 6)
-                            .padding(.top, 6)
-                        Text(expanded ? step : StepText.clean(step))
-                            .font(.caption)
-                            .fixedSize(horizontal: false, vertical: true)
+                if !compact || expanded {
+                    ForEach(Array((expanded ? steps : keySteps).enumerated()), id: \.offset) { _, step in
+                        HStack(alignment: .top, spacing: 8) {
+                            Circle()
+                                .fill(isBad(step) ? Color.red
+                                      : (isGood(step) ? Color.green : Color.secondary.opacity(0.4)))
+                                .frame(width: 6, height: 6)
+                                .padding(.top, 6)
+                            Text(expanded ? step : StepText.clean(step))
+                                .font(.caption)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
-                if keySteps.count < steps.count {
+                if compact || keySteps.count < steps.count {
                     Button {
                         withAnimation(.easeInOut(duration: 0.18)) { expanded.toggle() }
                     } label: {
-                        Label(expanded ? "收起" : "技术细节 \(steps.count) 行",
+                        Label(expanded ? "收起" : "\(title) \(steps.count) 行",
                               systemImage: expanded ? "chevron.up" : "chevron.down")
                             .font(.caption)
                     }
                 }
             } header: {
-                Text(title)
+                if !compact { Text(title) }
             }
         }
     }
@@ -783,8 +793,9 @@ private struct AirliftOverwriteTab: View {
             } header: {
                 Text("目标")
             } footer: {
-                Text("目录还是文件**自动识别**（问设备，不用你选）. "
-                     + "目标是目录时，落到目录下、用源文件名.")
+                Text("目录还是文件**自动识别**（以 `/` 结尾 = 目录；Media 内的路径还会问设备）.\n"
+                     + "目标在 Media 之外时设备**不让我们查**，识别不出来就按文件处理 —— "
+                     + "要写进目录请**在末尾加 `/`**，落到目录下用源文件名.")
             }
 
             Section {
@@ -881,7 +892,7 @@ private struct AirliftOverwriteTab: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            StepsSection(steps: steps)
+            StepsSection(steps: steps, title: "执行细节", compact: true)
         }
         .listStyle(.insetGrouped)
         .busyOverlay(working, title: "执行中…")
@@ -941,8 +952,7 @@ private struct AirliftOverwriteTab: View {
             Button("覆盖", role: .destructive) { Task { await overwrite() } }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("落点：\(resolvedPath ?? "?")\n源：AIR/\(selectedAirName ?? "?")"
-                 + (backupFirst ? "\n覆盖前会先备份原内容." : "\n已关闭备份."))
+            Text(resolvedMessage)
         }
         .confirmationDialog("确认删除？", isPresented: $confirmingDelete, titleVisibility: .visible) {
             Button("删除", role: .destructive) { Task { await deleteTarget() } }
@@ -959,6 +969,18 @@ private struct AirliftOverwriteTab: View {
         } message: {
             Text("只删 AIR 里的这些副本，设备上的目标文件不受影响.")
         }
+    }
+
+    /// 确认弹窗的正文：落点 + 源 + 备份；**识别不出来时明说**（不装）
+    private var resolvedMessage: String {
+        var text = "落点：" + (resolvedPath ?? "?")
+        text += "\n源：AIR/" + (selectedAirName ?? "?")
+        text += backupFirst ? "\n覆盖前会先备份原内容." : "\n已关闭备份."
+        if let resolved, !resolved.conclusive {
+            text += "\n\n设备不让我们查 Media 之外的路径 ⇒ **没能自动判断这是文件还是目录**，"
+                + "已按**文件**处理. 要写进目录，请在目标末尾加 `/` 再试."
+        }
+        return text
     }
 
     /// 自动识别后的落点（弹窗里显示给用户看）
@@ -1070,21 +1092,29 @@ private struct AirliftOverwriteTab: View {
     ///
     /// ## 为什么不再让用户手动选「目录 / 文件」（用户要求）
     /// 用户：「不要有手动开关目标路径是否为目录还是文件，你不能自动识别吗」
-    /// ⇒ 用 `afc.stat` 问设备（**几十毫秒的 AFC 往返，Media 之外 stat 也能过**）：
-    ///   · 路径以 `/` 结尾 ⇒ 目录
-    ///   · stat 回 `isDir = true` ⇒ 目录，落到它下面、用源文件名
-    ///   · 其余 ⇒ 文件
-    /// 识别不出来（stat 失败）时**按文件处理**（最保守），并且弹窗里会把落点写清楚，
-    /// 用户能当场看见我们打算写到哪 —— 不会有「悄悄写错地方」.
+    /// ⇒ 用 `afc.stat` 问设备：
+    ///   · 路径以 `/` 结尾 ⇒ **确定**是目录
+    ///   · stat 回 `isDir = true` ⇒ **确定**是目录，落到它下面、用源文件名
+    ///   · 其余 ⇒ 按文件处理
+    ///
+    /// ## 诚实说明（真机实测）
+    /// `afc.stat` 对 **Media 之外**的路径一律 `Afc(InvalidArg)` —— AFC 服务自己的根就是
+    /// Media，它出不去. 也就是说**目标在 Media 之外时我们问不到**.
+    /// ⇒ 这时**不装**（不假装识别成功），弹窗里明说「无法自动判断」，
+    ///   并提示「要写进目录请在末尾加 `/`」. 用户当场就能纠正，不会悄悄写错地方.
     private func prepareOverwrite() async {
         let path = target.trimmingCharacters(in: .whitespaces)
         var isDir = path.hasSuffix("/")
+        var conclusive = isDir
         if !isDir {
             let dict = AirliftJSON.dict(await airliftCall("afc.stat",
                                                           AirliftJSON.json(["path": path])))
-            isDir = AirliftJSON.bool(dict, "isDir") == true
+            if AirliftJSON.bool(dict, "exists") == true {
+                conclusive = true
+                isDir = AirliftJSON.bool(dict, "isDir") == true
+            }
         }
-        resolved = (isDir: isDir, leaf: isDir ? selectedAirName : nil)
+        resolved = (isDir: isDir, leaf: isDir ? selectedAirName : nil, conclusive: conclusive)
         confirming = true
     }
 
@@ -1213,7 +1243,7 @@ private struct AirliftThemeTab: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            StepsSection(steps: steps)
+            StepsSection(steps: steps, title: "执行细节", compact: true)
         }
         .listStyle(.insetGrouped)
         .busyOverlay(working, title: "写入中…")
@@ -1345,8 +1375,8 @@ private struct AirliftMoreTab: View {
                 NavigationLink {
                     AirliftTweaksTab()
                 } label: {
-                    MoreCard(icon: "slider.horizontal.3", title: "系统选项",
-                             subtitle: "移植自 Nugget：SpringBoard / AirDrop / 标签栏")
+                    MoreCard(icon: "slider.horizontal.3", title: "Nugget 设置",
+                             subtitle: "SpringBoard / AirDrop / 标签栏")
                 }
                 NavigationLink {
                     AirliftLogTab()
@@ -1591,7 +1621,7 @@ private struct AirliftSupervisedTab: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            StepsSection(steps: steps)
+            StepsSection(steps: steps, title: "执行细节", compact: true)
         }
         .listStyle(.insetGrouped)
         .busyOverlay(running || loading, title: running ? "执行中…" : "读取中…")
@@ -1933,9 +1963,9 @@ private struct AirliftBackupsTab: View {
     }
 }
 
-// MARK: - 系统选项（移植自 Nugget）
+// MARK: - Nugget 设置（移植自 Nugget）
 
-/// 「系统选项」：移植 Nugget 的 plist tweak.
+/// 「Nugget 设置」：移植 Nugget 的 plist tweak.
 ///
 /// ## 为什么能移植（研究结论）
 /// Nugget 自己的机制是 SparseRestore（部分恢复），**在 iOS 27 上已被 Apple 补掉**
@@ -1946,6 +1976,13 @@ private struct AirliftBackupsTab: View {
 /// Nugget 的 UI 每个设置三个单选 `Default / Enabled / Disabled`，
 /// `Default` 的动作是 `set_enabled(False)` = **不碰这个键** ⇒
 /// 我们关掉开关时**删掉这个键**，就等价于「回到系统默认」.
+///
+/// ## 为什么进页面只读一个文件（用户问「为什么要读取三次呢」）
+/// 12 个开关分布在 3 个 plist 里，而 **10 个都在 `com.apple.springboard.plist`** ——
+/// 另外两个各只有 1 个开关. 一次 airlift 读要 10~20 秒（读 = 移动 + 写回），
+/// 进页面就串行读 3 个 = 30~60 秒 ⇒ **那是白等**.
+/// ⇒ 现在：**进页面只读主文件**（10 个开关都在里面）；AirDrop / 标签栏那两组
+/// **你点那组的「读取」才读**. 每组都标了「读到 HH:MM · N 键」，什么时候读的一眼可见.
 private struct AirliftTweaksTab: View {
     /// 一条 tweak（键名与值照 Nugget 的 `tweak_loader.py:217-287` 抄）
     struct Tweak: Identifiable {
@@ -2022,6 +2059,31 @@ private struct AirliftTweaksTab: View {
         return seen
     }
 
+    /// 某一组用到的文件（去重）
+    private func files(in section: String) -> [String] {
+        var seen: [String] = []
+        for t in Self.tweaks where t.section == section && !seen.contains(t.file) {
+            seen.append(t.file)
+        }
+        return seen
+    }
+
+    /// 某个文件**上次成功读到**的时间（没读过 ⇒ nil）
+    @State private var readAt: [String: Date] = [:]
+
+    /// 「读到 09:31 · 49 键」—— 一眼看出这组的数据是新的还是旧的
+    private func readStamp(_ file: String) -> String {
+        guard let date = readAt[file] else { return "**还没读过**（点右边「读取」）" }
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        let keys = keysByFile[file]?.count ?? 0
+        return "读到 \(f.string(from: date)) · \(keys) 键"
+    }
+
+    private func sectionStamp(_ section: String) -> String {
+        files(in: section).map { readStamp($0) }.joined(separator: "  |  ")
+    }
+
     /// 短文件名（遮罩里显示，别把整条路径糊上去）
     private func shortFile(_ path: String) -> String {
         path.split(separator: "/").last.map(String.init) ?? path
@@ -2037,16 +2099,23 @@ private struct AirliftTweaksTab: View {
         List {
             Section {
                 Button {
-                    Task { await readFromDevice() }
+                    Task { await readFromDevice([Self.springboard]) }
                 } label: {
-                    Label("从设备重读（每个文件约 10~20 秒）", systemImage: "arrow.triangle.2.circlepath")
+                    Label("读取主文件（10 个开关都在里面）", systemImage: "arrow.clockwise")
+                }
+                .disabled(loading || working)
+                Button {
+                    Task { await readFromDevice(files) }
+                } label: {
+                    Label("全部重读（3 个文件，较慢）", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .disabled(loading || working)
             } footer: {
                 Text(note.isEmpty
                      ? "键名与值照 Nugget 抄. **关掉开关 = 删掉这个键 = 回到系统默认**（Nugget 的「Default」语义）.\n"
-                       + "进本页会**真的从设备读一遍**（不是拿缓存糊弄你）；改一次值 = 写一次 airlift.\n"
-                       + "读写都会**先让偏好服务（cfprefsd）松手** —— 它占着这几个 plist，不松手读不到也守不住.\n"
+                       + "进本页**只读主文件**（10/12 个开关在它里面）；另外两组各 1 个开关，点那组的「读取」才读 —— "
+                       + "一次 airlift 读要 10~20 秒，没必要为了 2 个开关先等 40 秒.\n"
+                       + "读写都会**先让偏好服务（cfprefsd）松手**，否则它占着文件读不到也守不住.\n"
                        + "改完**多数要 respring / 重启**才看得到效果."
                      : note)
                     .foregroundColor(note.isEmpty ? .secondary : AppTheme.accent)
@@ -2069,15 +2138,27 @@ private struct AirliftTweaksTab: View {
                         .disabled(working)
                     }
                 } header: {
-                    Text(section)
-                        .font(.footnote.weight(.semibold)).textCase(nil).foregroundColor(.secondary)
+                    HStack(spacing: 8) {
+                        Text(section)
+                            .font(.footnote.weight(.semibold)).textCase(nil)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Button("读取") {
+                            Task { await readFromDevice(files(in: section)) }
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .textCase(nil)
+                        .disabled(loading || working)
+                    }
                 } footer: {
-                    if section == "SpringBoard" {
-                        Text(Self.springboard).font(.system(.caption2, design: .monospaced))
-                    } else if section == "AirDrop" {
-                        Text(Self.sharingd).font(.system(.caption2, design: .monospaced))
-                    } else {
-                        Text(Self.uikit).font(.system(.caption2, design: .monospaced))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(sectionStamp(section))
+                            .font(.caption2)
+                            .foregroundColor(readAt[files(in: section).first ?? ""] == nil
+                                             ? .secondary : AppTheme.accent)
+                        Text(files(in: section).joined(separator: "\n"))
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundColor(.secondary)
                     }
                 }
             }
@@ -2085,7 +2166,7 @@ private struct AirliftTweaksTab: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .busyOverlay(loading || working, title: busyTitle)
-        .task { await readFromDevice() }
+        .task { await readFromDevice([Self.springboard]) }
     }
 
     /// 遮罩文案：读就写「读取中」，写就写「写入中」（用户反馈过这里显示错了）.
@@ -2104,35 +2185,38 @@ private struct AirliftTweaksTab: View {
 
     /// **真的从设备读一遍**（用户要求：进本页不要拿上一轮的缓存糊弄）.
     ///
-    /// 每个文件一次 airlift 读（10~20 秒），三个文件最多 ~60 秒 ⇒ **必须显示进度**，
-    /// 否则用户只会觉得卡死. 失败的文件如实报出名字（读本来就不稳，不是全部都会成）.
-    private func readFromDevice() async {
+    /// - Parameter targets: 只读这些文件（进页面只传主文件；某一组按需读）
+    ///
+    /// 每个文件一次 airlift 读（10~20 秒）⇒ **必须显示进度**，否则用户只会觉得卡死.
+    /// 失败的文件如实报出名字（读本来就不稳，不是全部都会成）.
+    private func readFromDevice(_ targets: [String]) async {
+        guard !targets.isEmpty else { return }
         working = true
         phase = .reading
         defer { working = false; phase = .idle; readProgress = (0, 0) }
-        let list = files
-        readProgress = (0, list.count)
-        var out: [String: [String: String]] = [:]
+        readProgress = (0, targets.count)
         var failed: [String] = []
-        for (index, file) in list.enumerated() {
-            readProgress = (index, list.count)
+        var okFiles: [String] = []
+        for (index, file) in targets.enumerated() {
+            readProgress = (index, targets.count)
             let dict = AirliftJSON.dict(await airliftCall("plist.tweak",
                                                           AirliftJSON.json(["path": file,
                                                                             "refresh": true])))
-            if !airliftOK(dict) {
-                failed.append(shortFile(file))
-            }
+            if airliftOK(dict) { okFiles.append(file) } else { failed.append(shortFile(file)) }
         }
         // 读完后统一取一遍（此时读成功的已在宿主的本地缓存里，这一遍是秒级的）
-        for file in list {
+        var out: [String: [String: String]] = keysByFile
+        for file in files {
             let dict = AirliftJSON.dict(await airliftCall("plist.tweak",
                                                           AirliftJSON.json(["path": file, "list": true])))
-            out[file] = (dict?["keys"] as? [String: String]) ?? [:]
+            if let keys = dict?["keys"] as? [String: String] { out[file] = keys }
         }
         keysByFile = out
+        let now = Date()
+        for file in okFiles { readAt[file] = now }
         note = failed.isEmpty
-            ? "已从设备重读 \(list.count) 个文件"
-            : "\(failed.count) 个文件没读成功：\(failed.joined(separator: "、"))（读本来就不稳，可再点一次）"
+            ? "已读到 \(okFiles.count) 个文件"
+            : "\(failed.count) 个没读成功：\(failed.joined(separator: "、"))（读本来就不稳，可再点一次）"
     }
 
     /// 只从宿主的本地缓存取一遍（改完值后用 —— 那时缓存就是刚写进去的内容，秒级）
