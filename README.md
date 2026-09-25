@@ -219,13 +219,13 @@ modules/com.example.mymodule/
 SwiftUI 视图没法从 zip 里加载。所以 `view` 是一个**注册名**：
 
 ```json
-"ui": { "style": "native", "view": "airlift-poc", "title": "Airlift PoC" }
+"ui": { "style": "native", "view": "my-module", "title": "My Module" }
 ```
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `style` | ✅ | 目前只有 `native` |
-| `view` | ✅ | 宿主内的视图注册名（小写字母/数字/连字符），如 `airlift-poc` |
+| `view` | ✅ | 宿主内的视图注册名（小写字母/数字/连字符），如 `my-module` |
 | `title` | ⬜ | 二级界面标题；为空用模块 `name` |
 
 **行为**：模块卡片上出现「打开」按钮 → 进入一个**全屏二级独立界面**——
@@ -253,17 +253,12 @@ SwiftUI 视图没法从 zip 里加载。所以 `view` 是一个**注册名**：
 |---|---|---|
 | `host.version` | 宿主版本 / build 号 | — |
 | `host.capabilities` | 列出本机实际支持的能力 | — |
-| `fs.read` | 读文件（沙盒外走漏洞利用） | 单文件；沙盒外**默认读后写回原位**（非破坏性），传 `allowMove: true` 才跳过写回 |
-| `fs.write` | 写文件（沙盒外走漏洞利用） | 单文件 |
-| `fs.delete` | 删文件（沙盒外走漏洞利用） | 单文件 |
-| `fs.exists` | 判存在 | ⚠️ **仅 App 沙盒内**（沙盒外无法只 stat 不搬动文件） |
-| `fs.list` | 列目录 | ⚠️ **仅 App 沙盒内**；沙盒外无法枚举（漏洞利用只能操作单个文件） |
-| `sys.supervised.get` | 读监督模式状态 | 读走 airlift（读后立刻写回原位） |
-| `sys.supervised.set` | 开关监督模式（改 `CloudConfigurationDetails.plist` 的 `IsSupervised`） | 全程 airlift，约 40~80 秒 |
-| `airlift.air` | AIR 中转站操作：`list` / `mkdir` / `read` / `write` / `delete` | 廉价 AFC，不经 airlift |
-| `airlift.pull` | 把沙盒外文件读到 AIR（原文件读后立刻写回原位） | 约 20~40 秒 |
-| `airlift.overwrite` | 用 AIR 里的文件（或沙盒内文件）**覆盖**任意沙盒外路径 | 可选覆盖前备份，约 20~60 秒 |
-| `afc.list` | 列目录（`root` 选根） | 廉价 AFC，不经 airlift |
+| `fs.read` | 读文件 | ⚠️ **仅 App 沙盒内** |
+| `fs.write` | 写文件 | ⚠️ **仅 App 沙盒内** |
+| `fs.delete` | 删文件 | ⚠️ **仅 App 沙盒内** |
+| `fs.exists` | 判存在 | ⚠️ **仅 App 沙盒内** |
+| `fs.list` | 列目录 | ⚠️ **仅 App 沙盒内** |
+| `afc.list` | 列目录（`root` 选根） | — |
 | `afc.read` | 读文件（`root` 选根） | 二进制请用 base64 |
 | `afc.write` | 写文件（`root` 选根） | — |
 | `afc.delete` | 删文件/目录（`root` 选根，`recursive` 控制） | — |
@@ -271,7 +266,6 @@ SwiftUI 视图没法从 zip 里加载。所以 `view` 是一个**注册名**：
 | `proc.list` | 列出进程 | — |
 | `proc.signal` | 给进程发信号 | 只认 SIGKILL / SIGSTOP / SIGCONT |
 | `notify.post` | 发本地通知 | 需用户已授权通知 |
-| `exploit.status` | 查漏洞利用可用性 | — |
 
 
 #### `afc.*` 的根（**如实说明，别误以为能浏览整个 /var**）
@@ -287,10 +281,9 @@ SwiftUI 视图没法从 zip 里加载。所以 `view` 是一个**注册名**：
 
 原因不是实现问题，是**没有通道**：RSD 服务表（**64 个服务**）里**没有任何服务把根设在 `/var`**；
 `house_arrest` 的 `VendContainer` 在 iOS 27 实测被拒（`VendDocuments` 要求目标 App
-开了文档共享）；而 airlift **本体**只能读写**单个已知文件**、**不能枚举目录**。
+开了文档共享）。
 
-> 所以「随便输一个路径就能浏览」在 airlift 这条路上**做不到** ——
-> 需要按已知路径读写单个文件时用 `airlift.pull` / `airlift.overwrite`。
+> 所以「随便输一个路径就能浏览」**做不到** —— 只有 `media` / `crash` 这两个根能用。
 
 ### 2.10 签名规则（重要）
 
@@ -381,8 +374,8 @@ python3 validate.py modules/com.escapeos.alist/module.json --skip-signature
 `requires`（§2.8）与 `ui`（§2.7）就是为解决「模块必须反向调用宿主」这个缺口加的，
 宿主从 v0.3.481 起支持。在此之前，需要沙盒外读写或改系统设置的模块只能自己重写整套漏洞利用。
 
-关键收益：模块调 `fs.read` 时**根本不关心底层是 bad_query 还是 airlift**——
-将来漏洞链被替换，模块零改动。这就是「装上就天衣无缝」的接缝所在。
+关键收益：模块调 `fs.read` 时**根本不关心底层怎么实现**——
+将来实现被替换，模块零改动。这就是「装上就天衣无缝」的接缝所在。
 
 ### 7.3 待办
 

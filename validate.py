@@ -77,19 +77,7 @@ KNOWN_CAPABILITIES = {
     "fs.delete",
     "fs.exists",
     "fs.list",
-    "sys.supervised.get",
-    "sys.supervised.set",
-    "airlift.air",
-    "airlift.pull",
-    "airlift.overwrite",
     "afc.stat",
-    "airlift.delete",
-    "airlift.writeMany",
-    "airlift.changes",
-    "airlift.changes.clear",
-    "airlift.backups",
-    "airlift.restore",
-    "plist.tweak",
     "apps.lookup",
     "afc.list",
     "afc.read",
@@ -99,7 +87,6 @@ KNOWN_CAPABILITIES = {
     "proc.list",
     "proc.signal",
     "notify.post",
-    "exploit.status",
 }
 
 # 原生界面形态（module.json "ui".style）
@@ -109,7 +96,7 @@ UI_STYLES = {"native"}
 #   bundled  = 内置进 app（随包发布，首次启动自动安装，用户卸载后不再回来）
 #   external = 独立模块，走 edge Release 的 .zip 按需导入（**默认**）
 # 默认取 external 是刻意的：「不内置」是安全的默认值 —— 忘了写字段时，
-# 模块不会被悄悄塞进 app（v0.3.481 真机踩过：airlift-poc 被自动打成了内置模块）。
+# 模块不会被悄悄塞进 app（v0.3.481 真机踩过：本该独立的模块被自动打成了内置模块）。
 DISTRIBUTIONS = {"bundled", "external"}
 
 
@@ -402,9 +389,9 @@ def check_ui(ui, rep: Report) -> None:
     elif style not in UI_STYLES:
         rep.err(f"ui.style={style!r} 不支持（目前仅 {' / '.join(sorted(UI_STYLES))}）")
     if not is_nonempty_str(ui.get("view")):
-        rep.err("ui.view 不能为空（宿主内的视图注册名，如 \"airlift-poc\"）")
+        rep.err("ui.view 不能为空（宿主内的视图注册名，如 \"my-module\"）")
     elif not re.match(r"^[a-z0-9][a-z0-9._-]*$", ui["view"]):
-        rep.warn(f"ui.view={ui['view']!r} 建议用小写字母/数字/连字符（如 airlift-poc）")
+        rep.warn(f"ui.view={ui['view']!r} 建议用小写字母/数字/连字符（如 my-module）")
     if ui.get("title") is not None and not is_str(ui["title"]):
         rep.err("ui.title 必须是字符串")
 

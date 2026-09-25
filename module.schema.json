@@ -109,11 +109,6 @@
           "fs.delete",
           "fs.exists",
           "fs.list",
-          "sys.supervised.get",
-          "sys.supervised.set",
-          "airlift.air",
-          "airlift.pull",
-          "airlift.overwrite",
           "afc.list",
           "afc.read",
           "afc.write",
@@ -121,8 +116,7 @@
           "afc.mkdir",
           "proc.list",
           "proc.signal",
-          "notify.post",
-          "exploit.status"
+          "notify.post"
         ]
       }
     },
@@ -135,7 +129,7 @@
         "style": { "enum": ["native"] },
         "view": {
           "type": "string",
-          "description": "宿主内的视图注册名，如 airlift-poc",
+          "description": "宿主内的视图注册名，如 my-module",
           "pattern": "^[a-z0-9][a-z0-9._-]*$"
         },
         "title": { "type": "string", "description": "二级界面标题；为空则用模块 name" }
