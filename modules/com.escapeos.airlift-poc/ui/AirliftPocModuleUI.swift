@@ -2062,13 +2062,14 @@ private struct AirliftTweaksTab: View {
     /// 某个文件**上次成功读到**的时间（没读过 ⇒ nil）
     @State private var readAt: [String: Date] = [:]
 
-    /// 「读到 09:31 · 49 键」—— 一眼看出这组的数据是新的还是旧的
+    /// 「本地副本 · 49 键」—— 一眼看出这组的数据是从哪来的
+    ///
+    /// 为什么写「本地副本」而不是「读到 HH:MM」：`Preferences/` 下的文件**搬不走**
+    /// （写进去允许、搬出来被拒），从设备读一定失败 ⇒ 显示的只能是我们本地记着的那份.
+    /// 不写假时间，免得让人以为是从设备读到的.
     private func readStamp(_ file: String) -> String {
-        guard let date = readAt[file] else { return "**还没读过**（点右边「读取」）" }
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm"
         let keys = keysByFile[file]?.count ?? 0
-        return "读到 \(f.string(from: date)) · \(keys) 键"
+        return "本地副本 · \(keys) 键"
     }
 
     private func sectionStamp(_ section: String) -> String {
@@ -2090,24 +2091,23 @@ private struct AirliftTweaksTab: View {
         List {
             Section {
                 Button {
-                    Task { await readFromDevice([Self.springboard]) }
+                    Task { await reload() }
                 } label: {
-                    Label("读取主文件（10 个开关都在里面）", systemImage: "arrow.clockwise")
+                    Label("刷新（瞬时）", systemImage: "arrow.clockwise")
                 }
                 .disabled(loading || working)
                 Button {
                     Task { await readFromDevice(files) }
                 } label: {
-                    Label("全部重读（3 个文件，较慢）", systemImage: "arrow.triangle.2.circlepath")
+                    Label("尝试从设备读（大概率失败，见说明）", systemImage: "arrow.down.circle.dotted")
                 }
                 .disabled(loading || working)
             } footer: {
                 Text(note.isEmpty
                      ? "键名与值照 Nugget 抄. **关掉开关 = 删掉这个键 = 回到系统默认**（Nugget 的「Default」语义）.\n"
-                       + "进本页**只读主文件**（10/12 个开关在它里面）；另外两组各 1 个开关，点那组的「读取」才读 —— "
-                       + "一次 airlift 读要 10~20 秒，没必要为了 2 个开关先等 40 秒.\n"
-                       + "读写都会**先让偏好服务（cfprefsd）松手**，否则它占着文件读不到也守不住.\n"
-                       + "改完**多数要 respring / 重启**才看得到效果."
+                       + "**开关状态与底稿来自本地副本**：`Preferences/` 下的文件设备**搬不走**"
+                       + "（写进去允许、搬出来被拒），所以从设备读一定失败 —— 这不是不稳定，是那个目录的权限不对称.\n"
+                       + "写入是允许的，所以开关**能改**；改完**多数要 respring / 重启**才看得到效果."
                      : note)
                     .foregroundColor(note.isEmpty ? .secondary : AppTheme.accent)
             }
@@ -2134,8 +2134,8 @@ private struct AirliftTweaksTab: View {
                             .font(.footnote.weight(.semibold)).textCase(nil)
                             .foregroundColor(.secondary)
                         Spacer()
-                        Button("读取") {
-                            Task { await readFromDevice(files(in: section)) }
+                        Button("刷新") {
+                            Task { await reload() }
                         }
                         .font(.footnote.weight(.semibold))
                         .textCase(nil)
