@@ -770,7 +770,7 @@ private struct AirliftOverwriteTab: View {
     @State private var steps: [String] = []
     @State private var errorText: String?
     @State private var okText: String?
-    /// 点「覆盖」时**自动识别**出来的落点（用户要求：不要手动开关目录/文件）
+    /// 点「覆盖」时按路径算出来的落点（用户要求：不要手动开关目录/文件）
     @State private var resolved: (isDir: Bool, leaf: String?)?
     /// 批量选择（用户要求：源文件也要能批量/全选删除）
     @State private var selecting = false
@@ -793,9 +793,8 @@ private struct AirliftOverwriteTab: View {
             } header: {
                 Text("目标")
             } footer: {
-                Text("目录还是文件**自动识别**（以 `/` 结尾 = 目录；Media 内的路径还会问设备）.\n"
-                     + "目标在 Media 之外时设备**不让我们查**，识别不出来就按文件处理 —— "
-                     + "要写进目录请**在末尾加 `/`**，落到目录下用源文件名.")
+                Text("目录还是文件**按路径判断**：以 `/` 结尾、或末段没有扩展名 ⇒ 目录"
+                     + "（落到目录下、用源文件名）；末段带扩展名 ⇒ 文件.")
             }
 
             Section {
@@ -971,19 +970,15 @@ private struct AirliftOverwriteTab: View {
         }
     }
 
-    /// 确认弹窗的正文：落点 + 源 + 备份；**识别不出来时明说**（不装）
+    /// 确认弹窗的正文：落点 + 源 + 备份
     private var resolvedMessage: String {
         var text = "落点：" + (resolvedPath ?? "?")
         text += "\n源：AIR/" + (selectedAirName ?? "?")
         text += backupFirst ? "\n覆盖前会先备份原内容." : "\n已关闭备份."
-        if let resolved, !resolved.conclusive {
-            text += "\n\n设备不让我们查 Media 之外的路径 ⇒ **没能自动判断这是文件还是目录**，"
-                + "已按**文件**处理. 要写进目录，请在目标末尾加 `/` 再试."
-        }
         return text
     }
 
-    /// 自动识别后的落点（弹窗里显示给用户看）
+    /// 按路径算出来的落点（弹窗里显示给用户看）
     private var resolvedPath: String? {
         guard let resolved else { return nil }
         let t = target.trimmingCharacters(in: .whitespaces)
@@ -1088,33 +1083,29 @@ private struct AirliftOverwriteTab: View {
         }
     }
 
-    /// 点「覆盖」时**先自动识别落点**，把识别结果显示在确认弹窗里，再让用户确认.
+    /// 从**路径本身**判断目标是目录还是文件 —— 不用问设备.
     ///
-    /// ## 为什么不再让用户手动选「目录 / 文件」（用户要求）
-    /// 用户：「不要有手动开关目标路径是否为目录还是文件，你不能自动识别吗」
-    /// ⇒ 用 `afc.stat` 问设备：
-    ///   · 路径以 `/` 结尾 ⇒ **确定**是目录
-    ///   · stat 回 `isDir = true` ⇒ **确定**是目录，落到它下面、用源文件名
-    ///   · 其余 ⇒ 按文件处理
+    /// 判据（看路径就能定）：
+    /// 1. 以 `/` 结尾 ⇒ **目录**
+    /// 2. 最后一段**带扩展名**（含 `.`）⇒ **文件**；否则 ⇒ **目录**
     ///
-    /// ## 诚实说明（真机实测）
-    /// `afc.stat` 对 **Media 之外**的路径一律 `Afc(InvalidArg)` —— AFC 服务自己的根就是
-    /// Media，它出不去. 也就是说**目标在 Media 之外时我们问不到**.
-    /// ⇒ 这时**不装**（不假装识别成功），弹窗里明说「无法自动判断」，
-    ///   并提示「要写进目录请在末尾加 `/`」. 用户当场就能纠正，不会悄悄写错地方.
+    /// 例：
+    /// ```
+    /// /var/mobile/Library/CallServices/Greetings/default/            ⇒ 目录
+    /// /var/mobile/Library/CallServices/Greetings/default             ⇒ 目录（末段无扩展名）
+    /// /var/mobile/Library/Preferences/com.apple.springboard.plist    ⇒ 文件
+    /// ```
+    private func isDirectoryPath(_ path: String) -> Bool {
+        if path.hasSuffix("/") { return true }
+        let leaf = path.split(separator: "/").last.map(String.init) ?? ""
+        return !leaf.contains(".")
+    }
+
+    /// 点「覆盖」时先按路径算出落点，把落点显示在确认弹窗里，再让用户确认.
     private func prepareOverwrite() async {
         let path = target.trimmingCharacters(in: .whitespaces)
-        var isDir = path.hasSuffix("/")
-        var conclusive = isDir
-        if !isDir {
-            let dict = AirliftJSON.dict(await airliftCall("afc.stat",
-                                                          AirliftJSON.json(["path": path])))
-            if AirliftJSON.bool(dict, "exists") == true {
-                conclusive = true
-                isDir = AirliftJSON.bool(dict, "isDir") == true
-            }
-        }
-        resolved = (isDir: isDir, leaf: isDir ? selectedAirName : nil, conclusive: conclusive)
+        let isDir = isDirectoryPath(path)
+        resolved = (isDir: isDir, leaf: isDir ? selectedAirName : nil)
         confirming = true
     }
 
