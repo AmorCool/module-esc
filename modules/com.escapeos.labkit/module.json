@@ -1,0 +1,42 @@
+{
+  "$schema": "../../module.schema.json",
+  "spec": "escape.module.v1",
+  "id": "com.escapeos.labkit",
+  "name": "LabKit 实验台",
+  "icon": "flask.fill",
+  "accent": "purple",
+  "version": "0.1.0",
+  "versionCode": 1,
+  "author": "local",
+  "description": "私人研究用实验模块骨架：自带 dylib 载荷 + 自带 WebView 界面。当前只做「加载 + 连通性 + 设备信息采集」三件事，作为后续系统级研究载荷的挂载点。",
+  "notes": "私人研究模块，请勿分发。dylib 需与宿主同证书签名后才能加载。",
+  "category": "开发者工具",
+  "minHostVersion": "0.3.481",
+  "distribution": "external",
+  "binary": {
+    "executable": "bin/labkit.dylib",
+    "autoStart": true,
+    "entrySymbol": "LabKitMain"
+  },
+  "webroot": "webroot",
+  "actions": [
+    {
+      "id": "ping",
+      "label": "连通性自检",
+      "icon": "bolt.fill",
+      "type": "bridge",
+      "symbol": "LabKitPing",
+      "args": [],
+      "success": "dylib 已加载并响应（LabKitPing 返回 0）"
+    },
+    {
+      "id": "info",
+      "label": "采集设备信息",
+      "icon": "info.circle",
+      "type": "bridge",
+      "symbol": "LabKitInfo",
+      "args": [],
+      "success": "已采集设备 / 沙盒信息 → 数据目录 labkit-info.json（模块日志 run.log 同步可见）"
+    }
+  ]
+}

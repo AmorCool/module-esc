@@ -1,0 +1,87 @@
+{
+  "$schema": "../../module.schema.json",
+  "spec": "escape.module.v1",
+  "id": "com.escapeos.vulnlab",
+  "name": "VulnLab 漏洞研究台",
+  "icon": "ant.fill",
+  "accent": "red",
+  "version": "0.1.0",
+  "versionCode": 1,
+  "author": "local",
+  "description": "iOS 漏洞挖掘研究台（binary/dylib 载荷）：在宿主沙盒内实读内核与系统基线、缓解措施可达性、IOKit 服务枚举、sysctl 全量扫描、syscall 可用性、沙盒读写与 mach service 可达性，全部结果落 JSON 到模块数据目录。用于确定攻击面起点，不含任何漏洞利用代码。",
+  "notes": "私人研究模块，请勿分发。dylib 需与宿主同一张开发证书（serial 级一致）签名后才能加载；本模块只做只读探测与信息采集，不修改系统状态。",
+  "category": "开发者工具",
+  "minHostVersion": "0.3.481",
+  "distribution": "external",
+  "binary": {
+    "executable": "bin/vulnlab.dylib",
+    "autoStart": true,
+    "entrySymbol": "VulnLabMain"
+  },
+  "webroot": "webroot",
+  "actions": [
+    {
+      "id": "baseline",
+      "label": "系统基线",
+      "icon": "info.circle",
+      "type": "bridge",
+      "symbol": "VulnLabBaseline",
+      "args": [],
+      "success": "已写入 data/vulnlab-baseline.json（uname / sysctl kern+hw / 进程身份 / csops 状态）"
+    },
+    {
+      "id": "mitigations",
+      "label": "缓解措施探测",
+      "icon": "lock.shield",
+      "type": "bridge",
+      "symbol": "VulnLabMitigations",
+      "args": [],
+      "success": "已写入 data/vulnlab-mitigations.json（PAC/PPL/SPTM/MIE/zone-seq/KASLR，可达性逐项标注）"
+    },
+    {
+      "id": "iokit",
+      "label": "IOKit 枚举",
+      "icon": "cpu",
+      "type": "bridge",
+      "symbol": "VulnLabIOKit",
+      "args": [],
+      "success": "已写入 data/vulnlab-iokit.json（沙盒内可达 IOService / user client 列表）"
+    },
+    {
+      "id": "sysctl",
+      "label": "sysctl 全量扫描",
+      "icon": "list.bullet.rectangle",
+      "type": "bridge",
+      "symbol": "VulnLabSysctl",
+      "args": [],
+      "success": "已写入 data/vulnlab-sysctl.json（命名节点取值 + 顶层命名空间 OID 计数）"
+    },
+    {
+      "id": "syscall",
+      "label": "syscall 可用性探测",
+      "icon": "arrow.triangle.branch",
+      "type": "bridge",
+      "symbol": "VulnLabSyscall",
+      "args": [],
+      "success": "已写入 data/vulnlab-syscall.json（安全子集调用结果 + ENOSYS 边界）"
+    },
+    {
+      "id": "sandbox",
+      "label": "沙盒能力探测",
+      "icon": "shippingbox",
+      "type": "bridge",
+      "symbol": "VulnLabSandbox",
+      "args": [],
+      "success": "已写入 data/vulnlab-sandbox.json（路径读/写可达性 + mach service 可达性）"
+    },
+    {
+      "id": "report",
+      "label": "生成汇总报告",
+      "icon": "doc.text.magnifyingglass",
+      "type": "bridge",
+      "symbol": "VulnLabReport",
+      "args": [],
+      "success": "已依次执行全部探测并写入 data/vulnlab-report.json（含各文件路径与统计）"
+    }
+  ]
+}

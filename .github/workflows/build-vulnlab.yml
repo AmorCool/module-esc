@@ -1,0 +1,103 @@
+name: Build vulnlab module for iOS
+
+# VulnLab 漏洞研究台（com.escapeos.vulnlab）是 **C 源码 + 编译期 dylib** 的 binary 模块，
+# 本机（Windows）与 ubuntu runner 都无法编译 iOS dylib，因此需要一个 macOS runner：
+#   · runner = macos-15（自带 Xcode / iPhoneOS SDK，与 build-alist.yml 同款）
+#   · 直接跑模块自带的 modules/com.escapeos.vulnlab/build.sh（xcrun clang -dynamiclib）
+#   · 产出 bin/vulnlab.dylib（arm64 + arm64e 胖二进制）后 ad-hoc codesign
+#   · 再走与 package.yml 相同的「签名清单 → validate → 打包 → 发 edge Release」流程
+#
+# ⚠️ 为什么不交给 package.yml：package.yml 跑在 ubuntu-latest，它只会把仓库里**已有**的
+#    文件打 zip。本模块的 dylib 是编译产物、不入库，所以必须在 macOS 上先编译再打包。
+#    已在 package.yml 的打包循环里把 com.escapeos.vulnlab 排除（避免产出缺 dylib 的坏 zip）。
+#
+# ⚠️ CI 里 dylib 只做 ad-hoc（codesign --sign -）伪签名；真机 dlopen 要求与宿主
+#    **同一张开发证书（serial 级一致）**。宿主会尝试用证书管理里的 p12 重签
+#    （BinaryModuleRunner.swift:300-328），因此 ad-hoc 产物在导入后由宿主重签即可。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build vulnlab.dylib (iOS arm64 + arm64e)
+        run: |
+          set -e
+          bash modules/com.escapeos.vulnlab/build.sh
+          file modules/com.escapeos.vulnlab/bin/vulnlab.dylib
+          ls -la modules/com.escapeos.vulnlab/bin/
+
+      - name: Ad-hoc codesign dylib
+        run: |
+          set -e
+          # ad-hoc 伪签名（与 build-alist.yml 同款）；真机最终由宿主用同款证书重签
+          codesign --force --sign - modules/com.escapeos.vulnlab/bin/vulnlab.dylib
+          codesign --verify --strict modules/com.escapeos.vulnlab/bin/vulnlab.dylib \
+            && echo "✅ dylib 签名自检通过"
+
+      - name: Sign module manifest (official ed25519)
+        env:
+          HOTFIX_PRIVATE_KEY: ${{ secrets.HOTFIX_PRIVATE_KEY }}
+        run: |
+          set -e
+          # -rawin（ed25519 必需）是 OpenSSL 3.0+ 选项；macos runner PATH 里常是 1.1.1w，
+          # 不支持 → 系统不是 3.x 就找/装 brew openssl@3（与 build-alist.yml 同款处理）。
+          OPENSSL=""
+          if openssl version 2>/dev/null | grep -q "^OpenSSL 3"; then
+            OPENSSL=openssl
+          else
+            for p in /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+              [ -x "$p" ] && OPENSSL="$p" && break
+            done
+            if [ -z "$OPENSSL" ]; then
+              brew install openssl@3
+              OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
+            fi
+          fi
+          echo "using: $OPENSSL"; $OPENSSL version
+          echo "$HOTFIX_PRIVATE_KEY" > /tmp/hotfix_key.pem
+          chmod 600 /tmp/hotfix_key.pem
+          $OPENSSL pkeyutl -sign -inkey /tmp/hotfix_key.pem -rawin \
+            -in modules/com.escapeos.vulnlab/module.json -out sig.bin
+          # macOS BSD base64 无 -w：用 openssl base64 -A 保证单行输出
+          $OPENSSL base64 -A -in sig.bin -out modules/com.escapeos.vulnlab/signature.sig
+          rm -f sig.bin
+          echo "✍ manifest 已签名"
+
+      - name: Validate manifest
+        run: python3 validate.py modules/com.escapeos.vulnlab/module.json
+
+      - name: Package module zip
+        run: |
+          set -e
+          mkdir -p dist
+          ver=$(python3 -c "import json;print(json.load(open('modules/com.escapeos.vulnlab/module.json',encoding='utf-8'))['version'])")
+          # signature.sig 与 bin/*.dylib 必须留在 zip 内（宿主导入时验签 + dlopen）
+          zip -r "dist/com.escapeos.vulnlab-v${ver}.zip" modules/com.escapeos.vulnlab \
+            -x '*/data/*' '*/run.log'
+          unzip -l "dist/com.escapeos.vulnlab-v${ver}.zip" | grep -qE 'signature\.sig$' \
+            || { echo "❌ zip 内缺少 signature.sig"; exit 1; }
+          unzip -l "dist/com.escapeos.vulnlab-v${ver}.zip" | grep -qE 'bin/vulnlab\.dylib$' \
+            || { echo "❌ zip 内缺少 bin/vulnlab.dylib"; exit 1; }
+          unzip -l "dist/com.escapeos.vulnlab-v${ver}.zip" | grep -qE 'module\.json$' \
+            || { echo "❌ zip 内缺少 module.json"; exit 1; }
+          ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulnlab-ios
+          path: dist/*.zip
+
+      - name: Publish to edge release (clobber)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload edge dist/*.zip --clobber -R "$GITHUB_REPOSITORY"

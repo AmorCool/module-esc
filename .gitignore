@@ -9,6 +9,10 @@ modules/*/bin/*
 modules/*/data/
 modules/*/run.log
 
+# 脱敏：模块内的 md 文档不进版本库（文件保留在本地）
+modules/*/README.md
+modules/*/docs/
+
 # macOS
 .DS_Store
 

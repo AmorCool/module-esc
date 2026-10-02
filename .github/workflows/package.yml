@@ -85,10 +85,14 @@ jobs:
           mkdir -p dist
           for dir in modules/*/; do
             id=$(basename "$dir")
-            if [ "$id" = "com.escapeos.alist" ]; then
-              echo "跳过 $id（由 build-alist.yml 构建发布）"
-              continue
-            fi
+            # 这两个模块带**编译期 dylib**，须在 macOS runner 上编译后再打包，
+            # 由各自的 build-*.yml 负责（此处 ubuntu 打包只会产出缺 dylib 的坏 zip）。
+            case "$id" in
+              com.escapeos.alist)
+                echo "跳过 $id（由 build-alist.yml 构建发布）"; continue ;;
+              com.escapeos.vulnlab)
+                echo "跳过 $id（由 build-vulnlab.yml 构建发布）"; continue ;;
+            esac
             ver=$(python3 -c "import json;print(json.load(open('$dir/module.json',encoding='utf-8'))['version'])")
             zip -r "dist/${id}-v${ver}.zip" "$dir" -x '*/.*' '*/data/*' '*/run.log'
             echo "打包: ${id}-v${ver}.zip"

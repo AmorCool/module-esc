@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>VulnLab 漏洞研究台</title>
+<style>
+  :root {
+    --bg: #0b0b0f; --card: #16161d; --line: #262632; --fg: #e8e8f0;
+    --dim: #9a9ab0; --accent: #ff5d5d; --ok: #4ade80; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+  body {
+    font: 15px/1.55 -apple-system, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+    padding: 18px 16px calc(28px + env(safe-area-inset-bottom));
+  }
+  h1 { font-size: 21px; margin: 0 0 2px; letter-spacing: .3px; }
+  h1 .tag {
+    font-size: 11px; font-weight: 600; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 999px;
+    padding: 1px 8px; margin-left: 8px; vertical-align: 3px;
+  }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line);
+          border-radius: 14px; padding: 14px 15px; margin-bottom: 12px; }
+  .card h2 { font-size: 12px; font-weight: 700; letter-spacing: .12em;
+             text-transform: uppercase; color: var(--dim); margin: 0 0 10px; }
+  ul { margin: 0; padding: 0; list-style: none; }
+  li { display: flex; gap: 10px; padding: 5px 0; align-items: baseline; }
+  li .k { color: var(--dim); min-width: 96px; font-size: 13px; flex: 0 0 auto; }
+  li .v { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px;
+         background: #000; border: 1px solid var(--line); border-radius: 6px;
+         padding: 1px 6px; color: var(--accent); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+         background: var(--ok); margin-right: 6px; vertical-align: 1px; }
+  .hint { color: var(--warn); font-size: 12.5px; margin-top: 8px; }
+  .foot { color: var(--dim); font-size: 11.5px; text-align: center; margin-top: 18px; }
+
+  /* 研究项目清单：与上方 li.k / li.v 体系同源，仅换成可勾选行 */
+  ul.proj li { display: flex; gap: 11px; align-items: flex-start; padding: 9px 0;
+               border-bottom: 1px solid var(--line); }
+  ul.proj li:last-child { border-bottom: 0; }
+  ul.proj input { margin: 2px 0 0; width: 18px; height: 18px; flex: 0 0 auto;
+                  accent-color: var(--accent); }
+  ul.proj .t { font-size: 14.5px; }
+  ul.proj .d { color: var(--dim); font-size: 12.5px; margin-top: 2px; }
+  .bar { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .bar button { font: inherit; font-size: 13.5px; font-weight: 500;
+                color: var(--accent); background: #000; border: 1px solid var(--line);
+                border-radius: 9px; padding: 8px 14px; }
+  .bar button:active { opacity: .6; }
+  .bar .count { color: var(--dim); font-size: 12.5px; }
+</style>
+</head>
+<body>
+  <h1>VulnLab 研究台<span class="tag">研究版</span></h1>
+  <div class="sub"><span class="dot"></span>dylib 载荷已随宿主加载（进程内）· 只读探测</div>
+
+  <div class="card">
+    <h2>模块形态</h2>
+    <ul>
+      <li><span class="k">形态</span><span class="v">binary（dylib）</span></li>
+      <li><span class="k">载荷</span><span class="v">bin/vulnlab.dylib</span></li>
+      <li><span class="k">入口符号</span><span class="v">VulnLabMain</span></li>
+      <li><span class="k">界面</span><span class="v">webroot（本页，WKWebView）</span></li>
+      <li><span class="k">输出</span><span class="v">模块数据目录 data/*.json</span></li>
+    </ul>
+    <div class="hint">仅做只读探测与信息采集，不含任何漏洞利用代码。私人研究，请勿分发。</div>
+  </div>
+
+  <div class="card">
+    <h2>怎么用</h2>
+    <ul>
+      <li><span class="k">1</span><span class="v">返回模块卡片（autoStart 已拉起 dylib）</span></li>
+      <li><span class="k">2</span><span class="v">点「执行」→ 选一个探测动作</span></li>
+      <li><span class="k">3</span><span class="v">结果写入 data/&lt;动作&gt;.json，日志见 run.log</span></li>
+    </ul>
+    <div class="hint">本页是静态界面：宿主 WKWebView 未开放 JS→dylib 通道，动作只能在卡片上执行。</div>
+  </div>
+
+  <div class="card">
+    <h2>研究项目</h2>
+    <ul class="proj" id="projects">
+      <li><input type="checkbox" value="surface"><div><div class="t">攻击面枚举</div><div class="d">已装载的 Mach-O / 可写路径 / 环境变量</div></div></li>
+      <li><input type="checkbox" value="sandbox"><div><div class="t">沙盒边界测试</div><div class="d">容器内可读路径与扩展属性</div></div></li>
+      <li><input type="checkbox" value="entitle"><div><div class="t">权限项审计</div><div class="d">签名里的 entitlement 与用途</div></div></li>
+      <li><input type="checkbox" value="ipa"><div><div class="t">IPA 结构核对</div><div class="d">重签名前后的签名段一致性</div></div></li>
+      <li><input type="checkbox" value="mem"><div><div class="t">内存布局采样</div><div class="d">模块加载基址与段权限</div></div></li>
+      <li><input type="checkbox" value="crashtr"><div><div class="t">崩溃日志归因</div><div class="d">符号化失败点与调用栈回溯</div></div></li>
+    </ul>
+    <div class="bar">
+      <button id="btn-clear-proj">清空勾选</button>
+      <span class="count" id="proj-count">未选</span>
+    </div>
+    <div class="hint">勾选只记录研究方向，存在本机 WebView 的 localStorage。本页是静态界面，勾选不会触发 dylib；执行请返回模块卡片点「执行」，结果在原生弹窗里显示。</div>
+  </div>
+
+  <div class="card">
+    <h2>探测动作 → 输出文件</h2>
+    <ul>
+      <li><span class="k">系统基线</span><span class="v">vulnlab-baseline.json</span></li>
+      <li><span class="k">缓解措施</span><span class="v">vulnlab-mitigations.json</span></li>
+      <li><span class="k">IOKit 枚举</span><span class="v">vulnlab-iokit.json</span></li>
+      <li><span class="k">sysctl 扫描</span><span class="v">vulnlab-sysctl.json</span></li>
+      <li><span class="k">syscall 探测</span><span class="v">vulnlab-syscall.json</span></li>
+      <li><span class="k">沙盒能力</span><span class="v">vulnlab-sandbox.json</span></li>
+      <li><span class="k">汇总报告</span><span class="v">vulnlab-report.json</span></li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>导出的符号</h2>
+    <ul>
+      <li><span class="k">入口</span><span class="v"><code>VulnLabMain</code></span></li>
+      <li><span class="k">自检</span><span class="v"><code>VulnLabPing</code></span></li>
+      <li><span class="k">基线</span><span class="v"><code>VulnLabBaseline</code></span></li>
+      <li><span class="k">缓解</span><span class="v"><code>VulnLabMitigations</code></span></li>
+      <li><span class="k">IOKit</span><span class="v"><code>VulnLabIOKit</code></span></li>
+      <li><span class="k">sysctl</span><span class="v"><code>VulnLabSysctl</code></span></li>
+      <li><span class="k">syscall</span><span class="v"><code>VulnLabSyscall</code></span></li>
+      <li><span class="k">沙盒</span><span class="v"><code>VulnLabSandbox</code></span></li>
+      <li><span class="k">汇总</span><span class="v"><code>VulnLabReport</code></span></li>
+      <li><span class="k">能力钩子</span><span class="v"><code>escape_module_init</code>（预留）</span></li>
+    </ul>
+  </div>
+
+  <div class="foot">vulnlab.v0.1 · escape.module.v1</div>
+
+<script>
+"use strict";
+/* 研究项目勾选：localStorage 持久化（file:// 下被拒则退回内存），只记录方向 */
+(function () {
+  var KEY = "vulnlab.projects";
+  var mem = {};
+  function store(k, v) {
+    try {
+      if (v === undefined) return localStorage.getItem(k);
+      localStorage.setItem(k, v);
+      return v;
+    } catch (e) {
+      if (v === undefined) return (k in mem) ? mem[k] : null;
+      mem[k] = v;
+      return v;
+    }
+  }
+
+  var box = document.getElementById("projects");
+  if (!box) return;
+  var cbs = box.querySelectorAll("input[type=checkbox]");
+  var saved = store(KEY);
+  var picked = saved ? saved.split(",") : [];
+
+  function update() {
+    var n = 0;
+    for (var i = 0; i < cbs.length; i++) if (cbs[i].checked) n++;
+    var el = document.getElementById("proj-count");
+    if (el) el.textContent = n ? ("已选 " + n + " 项") : "未选";
+  }
+  function save() {
+    var on = [];
+    for (var i = 0; i < cbs.length; i++) if (cbs[i].checked) on.push(cbs[i].value);
+    store(KEY, on.join(","));
+    update();
+  }
+
+  for (var i = 0; i < cbs.length; i++) {
+    if (picked.indexOf(cbs[i].value) >= 0) cbs[i].checked = true;
+    cbs[i].addEventListener("change", save);
+  }
+  document.getElementById("btn-clear-proj").addEventListener("click", function () {
+    for (var j = 0; j < cbs.length; j++) cbs[j].checked = false;
+    save();
+  });
+  update();
+})();
+</script>
+</body>
+</html>
